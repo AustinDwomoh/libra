@@ -4,7 +4,7 @@ Job Application Agent (AI version with editable drafts)
 
 import json
 from openai import OpenAI  # pip install openai
-from crawler import JobScraper
+from Count import Azalea_
 
 # ----------------------------
 # 1. Job Collector (dummy for now)
@@ -15,7 +15,7 @@ class Virgo:
         pass
 
     def collect_jobs(self):
-        return JobScraper().scrape('www.ariesproject.xyz')
+        return Azalea_().run('www.ariesproject.xyz')
 
 
     # ----------------------------

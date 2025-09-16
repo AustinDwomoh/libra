@@ -1,7 +1,7 @@
 import requests,json,csv
 import pandas as pd
 from bs4 import BeautifulSoup
-class Zodiac:
+class Azalea_:
     def __init__(self, url=None):
         self.url = url or "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
         self.readme_text = None
@@ -53,10 +53,15 @@ class Zodiac:
         with open('jobs.json', 'w', encoding='utf-8') as f:
             json.dump(jobs, f, indent=2)
         print(f"✅ Tables parsed and company names propagated")
-        return self.tables
+        return jobs
 
     def make_json(self, csv_file, json_file):
-         # Load CSV into DataFrame
+        """Here incase I happen to need to convert a csv to json
+
+        Args:
+            csv_file (csv): the file to be converted path
+            json_file (json): the new path to store the json
+        """
         df = pd.read_csv(csv_file,encoding='utf-16')
 
         # Replace NaNs with empty strings for cleaner JSON
@@ -70,6 +75,12 @@ class Zodiac:
             json.dump(records, f, indent=2)
 
         print(f"✅ Converted {len(records)} records to {json_file}")
+
+    def run(self):
+        self.fetch_readme()
+        return self.parse_tables()
+        
+    
 
 class SponsorshipChecker:
     def __init__(self, h1b_file="h1b_data.csv", no_sponsor_file="no_sponsor.txt"):
@@ -116,7 +127,7 @@ class SponsorshipDB:
         return normalized in self.employers
     
 
-Zodiac().make_json(csv_file='Employer Information.csv',json_file='H1b.json')
+
 
 
 
