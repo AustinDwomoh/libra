@@ -1,14 +1,15 @@
-import requests,json,csv
+import requests, json, csv
 import pandas as pd
 from bs4 import BeautifulSoup
+from rapidfuzz import fuzz
+
 class Azalea_:
     def __init__(self, url=None):
         self.url = url or "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
         self.readme_text = None
-        self.tables = []
+        self.jobs = []
 
     def fetch_readme(self):
-        """Download README.md from GitHub."""
         resp = requests.get(self.url)
         if resp.status_code != 200:
             raise Exception(f"Failed to fetch README, status {resp.status_code}")
@@ -16,7 +17,6 @@ class Azalea_:
         return self.readme_text
 
     def parse_tables(self):
-        """Parse all tables from README and propagate parent company to child jobs."""
         if not self.readme_text:
             raise Exception("README not fetched yet. Call fetch_readme() first.")
         soup = BeautifulSoup(self.readme_text, "html.parser")
@@ -34,8 +34,6 @@ class Azalea_:
                 company = current_company
 
                 title = tds[1].get_text(strip=True) if len(tds) > 1 else ""
-
-  
                 location = tds[2].get_text(strip=True) if len(tds) > 2 else ""
                 app_link = None
                 if len(tds) > 3:
@@ -50,59 +48,42 @@ class Azalea_:
                     "link": app_link
                 })
 
-        with open('jobs.json', 'w', encoding='utf-8') as f:
-            json.dump(jobs, f, indent=2)
-        print(f"✅ Tables parsed and company names propagated")
+        self.jobs = jobs
+        print(f"✅ Parsed {len(jobs)} job entries")
         return jobs
 
-    def make_json(self, csv_file, json_file):
-        """Here incase I happen to need to convert a csv to json
+    def tag_sponsorship(self, sponsorship_db, use_fuzzy=False, threshold=90):
+        if not self.jobs:
+            self.parse_tables()
 
-        Args:
-            csv_file (csv): the file to be converted path
-            json_file (json): the new path to store the json
-        """
-        df = pd.read_csv(csv_file,encoding='utf-16')
+        for job in self.jobs:
+            company = job["company"]
+            if use_fuzzy:
+                job["sponsorship"] = (
+                    "✅ Likely sponsorship" if sponsorship_db.fuzzy_match(company, threshold)
+                    else "❌ No record found"
+                )
+            else:
+                job["sponsorship"] = (
+                    "✅ Likely sponsorship" if sponsorship_db.has_sponsorship(company)
+                    else "❌ No record found"
+                )
 
-        # Replace NaNs with empty strings for cleaner JSON
-        df.fillna("", inplace=True)
+        with open("tagged_jobs.json", "w", encoding="utf-8") as f:
+            json.dump(self.jobs, f, indent=2)
+        print("🏷️ Sponsorship tagging complete")
 
-        # Convert to list of dictionaries
-        records = df.to_dict(orient="records")
-
-        # Save to JSON file
-        with open(json_file, "w", encoding="utf-8") as f:
-            json.dump(records, f, indent=2)
-
-        print(f"✅ Converted {len(records)} records to {json_file}")
-
-    def run(self):
+    def run(self, use_fuzzy=False):
         self.fetch_readme()
-        return self.parse_tables()
-        
-    
-
-class SponsorshipChecker:
-    def __init__(self, h1b_file="h1b_data.csv", no_sponsor_file="no_sponsor.txt"):
-        self.h1b_companies = set(pd.read_csv(h1b_file)["Company"].str.lower())
-        with open(no_sponsor_file, "r") as f:
-            self.no_sponsor = set(line.strip().lower() for line in f)
-
-    def check(self, company):
-        c = company.lower()
-        if c in self.no_sponsor:
-            return "❌ No sponsorship"
-        elif c in self.h1b_companies:
-            return "✅ Likely sponsorship"
-        else:
-            return "❓ Unknown"
+        self.parse_tables()
+        sponsorship_db = SponsorshipDB(csv_paths=["Employer_info.csv"])
+        if sponsorship_db:
+            self.tag_sponsorship(sponsorship_db, use_fuzzy=use_fuzzy)
+        return self.jobs
 
 
 class SponsorshipDB:
     def __init__(self, csv_paths=None):
-        """
-        csv_paths: list of paths to CSV files that include employer names that have done H-1B / LCA filings
-        """
         self.employers = set()
         if csv_paths:
             for path in csv_paths:
@@ -110,8 +91,14 @@ class SponsorshipDB:
 
     def _load_csv(self, path):
         df = pd.read_csv(path, low_memory=False)
-        # The column names differ depending on source; try common ones
-        possible_cols = ['EmployerName', 'Employer', 'Employer_Name', 'CompanyName']
+        possible_cols = [
+    'EmployerName',
+    'Employer',
+    'Employer_Name',
+    'CompanyName',
+    'Employer (Petitioner) Name'  # <-- Add this
+]
+
         for col in possible_cols:
             if col in df.columns:
                 names = df[col].dropna().astype(str)
@@ -123,11 +110,11 @@ class SponsorshipDB:
         return s.strip().lower()
 
     def has_sponsorship(self, company_name):
-        normalized = self._normalize(company_name)
-        return normalized in self.employers
-    
+        return self._normalize(company_name) in self.employers
 
-
-
-
-
+    def fuzzy_match(self, company_name, threshold=90):
+        target = self._normalize(company_name)
+        for employer in self.employers:
+            if fuzz.ratio(employer, target) >= threshold:
+                return True
+        return False
