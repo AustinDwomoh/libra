@@ -1,96 +1,140 @@
-"""
-Job Application Agent (AI version with editable drafts)
-"""
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+from datetime import datetime
+#from services.azalea import Azalea_
+from services.db_manager import JobDatabase
 
-import json
-from openai import OpenAI  # pip install openai
-from Count import Azalea_
-
-# ----------------------------
-# 1. Job Collector (dummy for now)
-# ----------------------------
-
-class Virgo:
-    def __init__(self):
-        pass
-
-    def collect_jobs(self):
-        return Azalea_().run('www.ariesproject.xyz')
-
-
-    # ----------------------------
-    # 2. GPT Cover Letter Drafting
-    # ----------------------------
-    client = OpenAI(api_key="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")
-
-    def draft_cover_letter(job, resume):
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",   # or "gpt-4o" / "gpt-3.5-turbo"
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {"role": "user", "content": f"Write a cover letter for this job:\n{job}\nResume:\n{resume}"}
-                ]
-            )
-            return response.choices[0].message.content
-        except Exception:
-            return f"Mock Cover Letter for job {job['title']} with resume {resume[:50]}..."
-    """ Check hugging face """
-    # ----------------------------
-    # 3. Interactive Editing
-    # ----------------------------
-    def review_and_edit(application):
-        print("\n--- Drafted Cover Letter ---")
-        print(application["cover_letter"])
-        print("\nWould you like to edit this? (y/n)")
-        choice = input("> ").strip().lower()
-
-        if choice == "y":
-            print("\nEnter your edited cover letter (finish with Ctrl+D / Ctrl+Z):")
-            edited = []
-            try:
-                while True:
-                    line = input()
-                    edited.append(line)
-            except EOFError:
-                pass
-            application["cover_letter"] = "\n".join(edited)
-
-        return application
+#scrape = Azalea_()
+app = Flask(__name__)
+CORS(app)
+@app.route('/', methods=['GET'])
+def home():
+    """API home endpoint with documentation"""
+    return jsonify({
+        "message": "Job Scraping API",
+        "version": "1.0",
+        "endpoints": {
+            "GET /": "API documentation",
+            "GET /api/jobs": "Get all jobs with optional filters (company, sponsorship, limit)",
+            "GET /api/jobs/company/<company_name>": "Get all jobs from a specific company",
+            "GET /api/jobs/search/<keyword>": "Search jobs by keyword in title or company",
+            "GET /api/jobs/export": "Export all jobs as JSON"
+        }
+    })
 
 
-    # ----------------------------
-    # 4. Save Applications
-    # ----------------------------
-    def save_applications(applications, filename="applications.json"):
-        with open(filename, "w") as f:
-            json.dump(applications, f, indent=2)
-        print(f"\n✅ Saved {len(applications)} applications to {filename}")
+@app.route('/api/jobs', methods=['GET'])
+def get_jobs():
+    """Get all scraped jobs with optional filtering by company and sponsorship"""
+    company = request.args.get('company')
+    sponsorship = request.args.get('sponsorship')
+    limit = request.args.get('limit', type=int)
 
-    """ Embeddings: sentence-transformers/all-MiniLM-L6-v2 (very lightweight, good for job ↔ resume matching)
+    with JobDatabase() as db:
+        # Build dynamic query based on filters
+        conditions = []
+        params = []
 
-    Text generation: mistralai/Mistral-7B-Instruct or tiiuae/falcon-7b-instruct
+        if company:
+            conditions.append("company ILIKE %s")
+            params.append(f"%{company}%")
 
-    Summarization: facebook/bart-large-cnn """
-    # ----------------------------
-    # Main Agent Runner
-    # ----------------------------
-    """ if __name__ == "__main__":
+        if sponsorship:
+            conditions.append("sponsorship = %s")
+            params.append(sponsorship)
 
-        resume = "Python, Django, React, REST APIs, SQL, problem-solving"
+        # Build query
+        if conditions:
+            where_clause = " AND ".join(conditions)
+            query = f"SELECT * FROM jobs WHERE {where_clause} ORDER BY created_at DESC"
+        else:
+            query = "SELECT * FROM jobs ORDER BY created_at DESC"
 
-        jobs = irgo.collect_jobs()
-        applications = []
+        if limit:
+            query += f" LIMIT {limit}"
 
-        for job in jobs:
-            draft = draft_cover_letter(job, resume)
-            application = {
-                "job": job,
-                "resume": resume,
-                "cover_letter": draft
-            }
-            reviewed = review_and_edit(application)
-            applications.append(reviewed)
+        db.cursor.execute(query, params)
+        jobs = db.cursor.fetchall()
 
-        save_applications(applications) """
-Virgo().collect_jobs()
+    return jsonify({
+        "success": True,
+        "count": len(jobs),
+        "jobs": jobs
+    })
+
+
+@app.route('/api/jobs/company/<string:company_name>', methods=['GET'])
+def get_jobs_by_company(company_name):
+    """Get all jobs from a specific company"""
+    with JobDatabase() as db:
+        jobs = db.get_jobs_by_company(company_name)
+
+    return jsonify({
+        "success": True,
+        "company": company_name,
+        "count": len(jobs),
+        "jobs": jobs
+    })
+
+
+@app.route('/api/jobs/search/<string:keyword>', methods=['GET'])
+def search_jobs(keyword):
+    """Search for jobs by keyword in title or company name"""
+    with JobDatabase() as db:
+        jobs = db.search_jobs(keyword)
+
+    return jsonify({
+        "success": True,
+        "keyword": keyword,
+        "count": len(jobs),
+        "jobs": jobs
+    })
+
+@app.route('/api/jobs/sponsor/', methods=['GET'])
+def get_jobs_by_sponsorship():
+    """Get all jobs by sponsorship status"""
+    with JobDatabase() as db:
+        jobs = db.get_jobs_with_sponsorship()
+
+    return jsonify({
+        "success": True,
+        "sponsorship": "likely sponsorship",
+        "count": len(jobs),
+        "jobs": jobs
+    })
+
+
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return jsonify({
+        "success": False,
+        "message": "Endpoint not found"
+    }), 404
+
+
+@app.errorhandler(500)
+def internal_error(error):
+    return jsonify({
+        "success": False,
+        "message": "Internal server error"
+    }), 500
+
+
+if __name__ == '__main__':
+    print("🚀 Job Scraping API Starting...")
+    print("📍 API running at: http://localhost:5000")
+    print("📖 Read-only API - Job data populated by background scraper")
+    print("\nAvailable endpoints:")
+    print(" GET / - API documentation")
+    print(" GET /api/jobs - Get all jobs (filters: company, sponsorship, limit)")
+    print(" GET /api/jobs/company/<name> - Get jobs by company")
+    print(" GET /api/jobs/search/<keyword> - Search jobs")
+    print(" GET /api/jobs/export - Export all jobs")
+    print("\n📝 Example requests:")
+    print(' curl "http://localhost:5000/api/jobs?company=Google&sponsorship=Likely%20sponsorship"')
+    print(' curl "http://localhost:5000/api/jobs/company/Meta"')
+    print(' curl "http://localhost:5000/api/jobs/search/engineer"')
+    
+    
+    app.run(debug=False, host='0.0.0.0', port=5000)
