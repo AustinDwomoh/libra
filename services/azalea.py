@@ -1,10 +1,10 @@
 import emoji ,json, os
 from sponsor import SponsorshipDB
-from db_manager import JobDatabase
+from services.db_manager import JobDatabase
 from typing import List, Dict
-from config import Config
-from jsearch import JSearchHelper
-from simplify import SimplifyHelper
+from services.config import Config
+from services.jsearch import JSearchHelper
+from services.simplify import SimplifyHelper
  
 logger = Config.logger
 
@@ -30,13 +30,8 @@ class Azalea_:
             logger.info("✓ JSearch helper initialized")
         else:
             logger.warning("⚠ JSearch API key not found. JSearch scraping disabled.")
-        
-        # RemoteOK helper (always available)
-        #self.helpers['remoteok'] = RemoteOKHelper()
-        #logger.info("✓ RemoteOK helper initialized")
     
-    def fetch_from_source(self, source: str, position_type: str = "intern", 
-                     date_posted: str = "week", **kwargs) -> List[Dict]:
+    def fetch_from_source(self, source: str, position_type: str = "intern",date_posted: str = "week", **kwargs) -> List[Dict]:
         """
         Fetch jobs from a specific source.
         
@@ -59,10 +54,8 @@ class Azalea_:
             if source == 'jsearch':
                 queries = kwargs.get('queries')
                 return helper.fetch_jobs(queries, position_type=position_type, date_posted=date_posted)
-            #elif source == 'remoteok':
-            #   return helper.fetch_jobs(position_type=position_type)
             else:
-                # Simplify only has internships
+    
                 return helper.fetch_jobs()
         except Exception as e:
             logger.error(f"{source.capitalize()} scraping failed: {e}")
@@ -79,19 +72,13 @@ class Azalea_:
         """
         all_jobs = []
         
-        # Fetch from Simplify (internships only)
         if position_type in ["intern", "both"]:
             simplify_jobs = self.fetch_from_source('simplify')
             all_jobs.extend(simplify_jobs)
-        
-        # Fetch from JSearch (if available)
+
         if 'jsearch' in self.helpers:
             jsearch_jobs = self.fetch_from_source('jsearch', position_type=position_type, queries=jsearch_queries)
             all_jobs.extend(jsearch_jobs)
-        
-        # Fetch from RemoteOK
-        #remoteok_jobs = self.fetch_from_source('remoteok', position_type=position_type)
-        #all_jobs.extend(remoteok_jobs)
         
         logger.info(f"Total positions fetched from all sources: {len(all_jobs)}")
         return all_jobs

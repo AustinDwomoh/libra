@@ -1,9 +1,10 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
-from config import Config
+from services.config import Config
 from typing import Optional, List, Dict, Any
 
 logger = Config.logger
+
 def get_db_connection():
     """
     Create and return a database connection.

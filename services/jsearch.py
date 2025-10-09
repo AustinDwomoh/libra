@@ -1,7 +1,8 @@
 from typing import List, Dict
 import requests, time
-from config import Config,logger
+from services.config import Config
 
+logger = Config.logger
 class JSearchHelper:
     """Helper class for JSearch API integration via     OpenWebNinja"""
     

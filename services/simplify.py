@@ -2,7 +2,9 @@ from typing import List, Dict
 import requests
 import emoji 
 from bs4 import BeautifulSoup
-from config import Config,logger
+from config import Config
+
+logger = Config.logger
 class SimplifyHelper:
     """Helper class for scraping Simplify GitHub README"""
     
@@ -41,8 +43,7 @@ class SimplifyHelper:
         jobs = []
 
         tables = soup.find_all("table")
-        logger.info(f"Simplify: Found {len(tables)} tables to parse")
-
+    
         for table_idx, table in enumerate(tables):
             current_company = None
             row_count = 0
@@ -62,7 +63,6 @@ class SimplifyHelper:
                 if not current_company:
                     continue
 
-                # Extract job information
                 current_company = self.clean_company_name(current_company)
                 job = {
                     "company": current_company,
@@ -80,7 +80,6 @@ class SimplifyHelper:
                         if href and not href.startswith("#") and "github.com" not in href:
                             job["link"] = href
                 
-                # Fallback: search other cells
                 if not job["link"]:
                     for td in tds[1:]:
                         a_tag = td.find("a", href=True)
@@ -90,7 +89,7 @@ class SimplifyHelper:
                                 job["link"] = href
                                 break
 
-                # Validate and add job
+          
                 if self._is_valid_job(job):
                     jobs.append(job)
             
@@ -107,10 +106,6 @@ class SimplifyHelper:
             job.get("location") and
             job.get("link")
         )
-
-        if not is_valid:
-            logger.debug(f"Simplify: Invalid job entry: {job}")
-
         return is_valid
     
     def fetch_jobs(self) -> List[Dict]:
