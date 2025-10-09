@@ -1,5 +1,5 @@
 import emoji ,json, os
-from sponsor import SponsorshipDB
+from services.sponsor import SponsorshipDB
 from services.db_manager import JobDatabase
 from typing import List, Dict
 from services.config import Config

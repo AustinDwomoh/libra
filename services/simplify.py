@@ -2,7 +2,7 @@ from typing import List, Dict
 import requests
 import emoji 
 from bs4 import BeautifulSoup
-from config import Config
+from services.config import Config
 
 logger = Config.logger
 class SimplifyHelper:
