@@ -1,305 +1,12 @@
-import requests, emoji, logging, json, os, time
-from bs4 import BeautifulSoup
-from assist import SponsorshipDB
+import emoji ,json, os
+from sponsor import SponsorshipDB
 from db_manager import JobDatabase
 from typing import List, Dict
-from dotenv import load_dotenv
-
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-
-class Config:
-    """Configuration constants for the scraper."""
-    DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
-    SPONSORSHIP_CSV = "resources/Employer_info.csv"
-    FUZZY_THRESHOLD = 90
-    REQUEST_TIMEOUT = 10
-    JSEARCH_API_URL = "https://jsearch.p.rapidapi.com/search"
-    REMOTEOK_API_URL = "https://remoteok.com/api"
-
-
-# ============================================================================
-# HELPER CLASSES - Job Source Scrapers
-# ============================================================================
-
-class SimplifyHelper:
-    """Helper class for scraping Simplify GitHub README"""
-    
-    def __init__(self, url: str = None):
-        self.url = url or Config.DEFAULT_URL
-        self.readme_text = None
-    
-    def fetch_readme(self):
-        """Fetch README content from Simplify GitHub."""
-        logger.info(f"Simplify: Fetching README from {self.url}...")
-        try:
-            resp = requests.get(self.url, timeout=Config.REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            self.readme_text = resp.text
-            logger.info(f"Simplify: Successfully fetched README ({len(self.readme_text)} characters)")
-            return self.readme_text
-        except requests.Timeout:
-            logger.error("Simplify: Request timed out")
-            raise
-        except requests.RequestException as e:
-            logger.error(f"Simplify: Failed to fetch README: {e}")
-            raise
-    
-    def clean_company_name(self, name: str) -> str:
-        """Clean and normalize company name by removing emojis and extra spaces."""
-        no_emoji = emoji.replace_emoji(name, replace='')
-        return no_emoji.strip().lower()
-    
-    def parse_tables(self) -> List[Dict]:
-        """Parse HTML tables to extract job information from Simplify."""
-        logger.info("Simplify: Parsing job tables...")
-        if not self.readme_text:
-            raise ValueError("README not fetched yet. Call fetch_readme() first.")
-        
-        soup = BeautifulSoup(self.readme_text, "html.parser")
-        jobs = []
-
-        tables = soup.find_all("table")
-        logger.info(f"Simplify: Found {len(tables)} tables to parse")
-
-        for table_idx, table in enumerate(tables):
-            current_company = None
-            row_count = 0
-            
-            for tr in table.find_all("tr"):
-                tds = tr.find_all("td")
-                if not tds or len(tds) < 3:
-                    continue
-                
-                row_count += 1
-                first_col_text = tds[0].get_text(strip=True)
-                
-                # Check if this is a continuation row (↳) or new company
-                if first_col_text and first_col_text != "↳":
-                    current_company = first_col_text
-                
-                if not current_company:
-                    continue
-
-                # Extract job information
-                current_company = self.clean_company_name(current_company)
-                job = {
-                    "company": current_company,
-                    "title": tds[1].get_text(strip=True) if len(tds) > 1 else "",
-                    "location": tds[2].get_text(strip=True) if len(tds) > 2 else "",
-                    "link": None,
-                    "source": "simplify"
-                }
-
-                # Extract application link
-                if len(tds) > 3:
-                    a_tag = tds[3].find("a", href=True)
-                    if a_tag:
-                        href = a_tag["href"]
-                        if href and not href.startswith("#") and "github.com" not in href:
-                            job["link"] = href
-                
-                # Fallback: search other cells
-                if not job["link"]:
-                    for td in tds[1:]:
-                        a_tag = td.find("a", href=True)
-                        if a_tag:
-                            href = a_tag["href"]
-                            if href and not href.startswith("#") and "github.com" not in href:
-                                job["link"] = href
-                                break
-
-                # Validate and add job
-                if self._is_valid_job(job):
-                    jobs.append(job)
-            
-            logger.debug(f"Simplify: Table {table_idx + 1}: Processed {row_count} rows")
-
-        logger.info(f"Simplify: Parsed {len(jobs)} valid job entries")
-        return jobs
-    
-    def _is_valid_job(self, job):
-        """Validate job entry has required fields."""
-        is_valid = bool(
-            job.get("company") and
-            job.get("title") and
-            job.get("location") and
-            job.get("link")
-        )
-
-        if not is_valid:
-            logger.debug(f"Simplify: Invalid job entry: {job}")
-
-        return is_valid
-    
-    def fetch_jobs(self) -> List[Dict]:
-        """Main method: Fetch and parse jobs from Simplify."""
-        self.fetch_readme()
-        return self.parse_tables()
-
-
-class JSearchHelper:
-    """Helper class for JSearch API integration"""
-    
-    def __init__(self, api_key: str):
-        self.api_key = api_key
-        self.headers = {
-            "X-RapidAPI-Key": api_key,
-            "X-RapidAPI-Host": "jsearch.p.rapidapi.com"
-        }
-    
-    def fetch_internships(self, query: str = "software intern", page: int = 1) -> List[Dict]:
-        """Fetch internships from JSearch API"""
-        logger.info(f"JSearch: Fetching results for '{query}'")
-        
-        params = {
-            "query": query,
-            "page": str(page),
-            "num_pages": "1",
-            "date_posted": "all",
-            "employment_types": "INTERN"
-        }
-        
-        try:
-            response = requests.get(
-                Config.JSEARCH_API_URL,
-                headers=self.headers,
-                params=params,
-                timeout=Config.REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            
-            data = response.json()
-            jobs = data.get("data", [])
-            
-            logger.info(f"JSearch: Found {len(jobs)} jobs for '{query}'")
-            return [self._map_job(job) for job in jobs]
-            
-        except requests.RequestException as e:
-            logger.error(f"JSearch API error: {e}")
-            return []
-    
-    def _map_job(self, job: Dict) -> Dict:
-        """Map JSearch response to standard job format"""
-        return {
-            "company": job.get("employer_name", ""),
-            "title": job.get("job_title", ""),
-            "location": self._get_location(job),
-            "link": job.get("job_apply_link", ""),
-            "source": "jsearch",
-            "date_posted": job.get("job_posted_at_datetime_utc"),
-            "description": job.get("job_description"),
-            "remote": job.get("job_is_remote", False),
-            "sponsorship": None
-        }
-    
-    def _get_location(self, job: Dict) -> str:
-        """Extract location from JSearch job"""
-        city = job.get("job_city", "")
-        state = job.get("job_state", "")
-        country = job.get("job_country", "")
-        
-        parts = [p for p in [city, state, country] if p]
-        return ", ".join(parts) if parts else "Not specified"
-    
-    def fetch_jobs(self, queries: List[str] = None) -> List[Dict]:
-        """Main method: Fetch jobs for multiple search queries with rate limiting"""
-        default_queries = [
-            "software engineer intern",
-            "data analyst intern",
-            "frontend developer intern",
-            "web developer intern"
-        ]
-        
-        queries = queries or default_queries
-        all_jobs = []
-        
-        for query in queries:
-            jobs = self.fetch_internships(query)
-            all_jobs.extend(jobs)
-            time.sleep(1)  # Rate limiting between queries
-        
-        logger.info(f"JSearch: Total {len(all_jobs)} jobs fetched")
-        return all_jobs
-
-
-class RemoteOKHelper:
-    """Helper class for RemoteOK API integration"""
-    
-    def __init__(self):
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        }
-    
-    def fetch_jobs(self) -> List[Dict]:
-        """Main method: Fetch jobs from RemoteOK API"""
-        logger.info("RemoteOK: Fetching jobs...")
-        
-        try:
-            response = requests.get(
-                Config.REMOTEOK_API_URL,
-                headers=self.headers,
-                timeout=Config.REQUEST_TIMEOUT
-            )
-            response.raise_for_status()
-            
-            jobs = response.json()[1:]  # Skip metadata at index 0
-            
-            # Filter for internships and relevant roles
-            internship_jobs = [
-                self._map_job(job) for job in jobs
-                if self._is_relevant_job(job)
-            ]
-            
-            logger.info(f"RemoteOK: Found {len(internship_jobs)} relevant jobs")
-            return internship_jobs
-            
-        except requests.RequestException as e:
-            logger.error(f"RemoteOK API error: {e}")
-            return []
-    
-    def _is_relevant_job(self, job: Dict) -> bool:
-        """Check if job is relevant (internship or entry-level tech role)"""
-        position = job.get("position", "").lower()
-        tags = [t.lower() for t in job.get("tags", [])]
-        
-        # Look for internships
-        internship_keywords = ["intern", "internship"]
-        is_internship = any(kw in position for kw in internship_keywords)
-        
-        # Or relevant tech roles with intern tag
-        relevant_keywords = ["frontend", "backend", "fullstack", "data", "software", "web", "developer", "engineer"]
-        is_relevant_tech = any(kw in position or kw in tags for kw in relevant_keywords)
-        has_intern_tag = any(kw in tags for kw in internship_keywords)
-        
-        return is_internship or (is_relevant_tech and has_intern_tag)
-    
-    def _map_job(self, job: Dict) -> Dict:
-        """Map RemoteOK response to standard job format"""
-        return {
-            "company": job.get("company", ""),
-            "title": job.get("position", ""),
-            "location": "Remote",
-            "link": job.get("url", ""),
-            "source": "remoteok",
-            "date_posted": job.get("date"),
-            "description": job.get("description"),
-            "remote": True,
-            "tags": job.get("tags", []),
-            "sponsorship": None
-        }
-
-
-# ============================================================================
-# MAIN ORCHESTRATOR CLASS
-# ============================================================================
+from config import Config
+from jsearch import JSearchHelper
+from simplify import SimplifyHelper
+ 
+logger = Config.logger
 
 class Azalea_:
     """
@@ -314,32 +21,33 @@ class Azalea_:
     
     def _init_helpers(self):
         """Initialize all helper classes for job sources"""
-        # Simplify helper (always available)
         self.helpers['simplify'] = SimplifyHelper()
         logger.info("✓ Simplify helper initialized")
-        
-        # JSearch helper (only if API key available)
-        rapidapi_key = os.getenv("RAPIDAPI_KEY")
-        if rapidapi_key:
-            self.helpers['jsearch'] = JSearchHelper(rapidapi_key)
+        j_search_key = Config.J_SEARCH_API_KEY
+        print(f"JSearch API Key: {j_search_key}")
+        if j_search_key:
+            self.helpers['jsearch'] = JSearchHelper()
             logger.info("✓ JSearch helper initialized")
         else:
-            logger.warning("⚠ RAPIDAPI_KEY not found. JSearch scraping disabled.")
+            logger.warning("⚠ JSearch API key not found. JSearch scraping disabled.")
         
         # RemoteOK helper (always available)
-        self.helpers['remoteok'] = RemoteOKHelper()
-        logger.info("✓ RemoteOK helper initialized")
+        #self.helpers['remoteok'] = RemoteOKHelper()
+        #logger.info("✓ RemoteOK helper initialized")
     
-    def fetch_from_source(self, source: str, **kwargs) -> List[Dict]:
+    def fetch_from_source(self, source: str, position_type: str = "intern", 
+                     date_posted: str = "week", **kwargs) -> List[Dict]:
         """
         Fetch jobs from a specific source.
         
         Args:
             source: Source name ('simplify', 'jsearch', 'remoteok')
-            **kwargs: Source-specific arguments (e.g., queries for jsearch)
+            position_type: "intern", "fulltime", or "both"
+            date_posted: "all", "today", "3days", "week", "month"
+            **kwargs: Source-specific arguments
         """
         logger.info("=" * 60)
-        logger.info(f"FETCHING FROM: {source.upper()}")
+        logger.info(f"FETCHING FROM: {source.upper()} ({position_type}, posted: {date_posted})")
         logger.info("=" * 60)
         
         helper = self.helpers.get(source)
@@ -350,32 +58,45 @@ class Azalea_:
         try:
             if source == 'jsearch':
                 queries = kwargs.get('queries')
-                return helper.fetch_jobs(queries)
+                return helper.fetch_jobs(queries, position_type=position_type, date_posted=date_posted)
+            #elif source == 'remoteok':
+            #   return helper.fetch_jobs(position_type=position_type)
             else:
+                # Simplify only has internships
                 return helper.fetch_jobs()
         except Exception as e:
             logger.error(f"{source.capitalize()} scraping failed: {e}")
             return []
-    
-    def fetch_all_sources(self, jsearch_queries: List[str] = None) -> List[Dict]:
-        """Fetch jobs from all available sources"""
+        
+
+    def fetch_all_sources(self, position_type: str = "intern", jsearch_queries: List[str] = None) -> List[Dict]:
+        """
+        Fetch jobs from all available sources
+        
+        Args:
+            position_type: "intern", "fulltime", or "both"
+            jsearch_queries: Custom queries for JSearch
+        """
         all_jobs = []
         
-        # Fetch from Simplify
-        simplify_jobs = self.fetch_from_source('simplify')
-        all_jobs.extend(simplify_jobs)
+        # Fetch from Simplify (internships only)
+        if position_type in ["intern", "both"]:
+            simplify_jobs = self.fetch_from_source('simplify')
+            all_jobs.extend(simplify_jobs)
         
         # Fetch from JSearch (if available)
         if 'jsearch' in self.helpers:
-            jsearch_jobs = self.fetch_from_source('jsearch', queries=jsearch_queries)
+            jsearch_jobs = self.fetch_from_source('jsearch', position_type=position_type, queries=jsearch_queries)
             all_jobs.extend(jsearch_jobs)
         
         # Fetch from RemoteOK
-        remoteok_jobs = self.fetch_from_source('remoteok')
-        all_jobs.extend(remoteok_jobs)
+        #remoteok_jobs = self.fetch_from_source('remoteok', position_type=position_type)
+        #all_jobs.extend(remoteok_jobs)
         
-        logger.info(f"Total jobs fetched from all sources: {len(all_jobs)}")
+        logger.info(f"Total positions fetched from all sources: {len(all_jobs)}")
         return all_jobs
+
+    
     
     def deduplicate_jobs(self, jobs: List[Dict]) -> List[Dict]:
         """Remove duplicate jobs based on company + title + location"""
@@ -450,42 +171,39 @@ class Azalea_:
             logger.info(f"✓ Total jobs in database: {total_jobs}")
             return inserted
     
-    def run(self, sources: List[str] = None, use_fuzzy: bool = True, 
-            jsearch_queries: List[str] = None, save_json: bool = True):
+    def run(self, sources: List[str] = None, position_type: str = "intern", use_fuzzy: bool = True, jsearch_queries: List[str] = None, save_json: bool = True,date_posted:str="week") -> Dict:
         """
-        Main orchestration method - coordinates entire scraping pipeline.
+        Main orchestration method
         
         Args:
-            sources: List of sources to scrape from. None = all available sources
+            sources: List of sources to scrape from
+            position_type: "intern", "fulltime", or "both"
             use_fuzzy: Whether to use fuzzy matching for sponsorship
-            jsearch_queries: Custom queries for JSearch (optional)
+            jsearch_queries: Custom queries for JSearch
             save_json: Whether to save results to JSON file
-        
-        Returns:
-            Dictionary with execution statistics
         """
         stats = {
             'simplify': 0,
             'jsearch': 0,
-            'remoteok': 0,
+            #'remoteok': 0,
             'total_fetched': 0,
             'unique_jobs': 0,
             'inserted': 0,
             'with_sponsorship': 0,
-            'errors': 0
+            'errors': 0,
+            'position_type': position_type
         }
         
         try:
-            # Step 1: Fetch from sources
+            # Fetch from sources
             if sources:
-                # Fetch only specified sources
                 all_jobs = []
                 for source in sources:
-                    jobs = self.fetch_from_source(source, queries=jsearch_queries if source == 'jsearch' else None)
+                    jobs = self.fetch_from_source(source, position_type=position_type, 
+                                                queries=jsearch_queries if source == 'jsearch' else None)
                     all_jobs.extend(jobs)
             else:
-                # Fetch from all available sources
-                all_jobs = self.fetch_all_sources(jsearch_queries)
+                all_jobs = self.fetch_all_sources(position_type=position_type, jsearch_queries=jsearch_queries)
             
             # Count by source
             for job in all_jobs:
@@ -538,7 +256,7 @@ class Azalea_:
         logger.info("Sources:")
         logger.info(f"  • Simplify GitHub: {stats['simplify']} jobs")
         logger.info(f"  • JSearch API: {stats['jsearch']} jobs")
-        logger.info(f"  • RemoteOK API: {stats['remoteok']} jobs")
+        #logger.info(f"  • RemoteOK API: {stats['remoteok']} jobs")
         logger.info("")
         logger.info("Results:")
         logger.info(f"  • Total fetched: {stats['total_fetched']} jobs")
@@ -551,11 +269,32 @@ class Azalea_:
 if __name__ == "__main__":
     orchestrator = Azalea_()
     
-    # Run with all sources
-    orchestrator.run()
+    print("\n" + "="*60)
+    print("LIBRA JOB SCRAPER")
+    print("="*60)
     
-    # Or run with specific sources only
-    # orchestrator.run(sources=['simplify', 'jsearch'])
+    # 1. Fetch internships only
+    print("\n[1/3] Fetching INTERNSHIPS...")
+    orchestrator.run(position_type="intern", save_json=True)
     
-    # Or run with custom JSearch queries
-    # orchestrator.run(jsearch_queries=['python intern', 'react intern'])
+    input("\n✓ Internships complete. Press Enter to fetch full-time jobs...")
+    
+    # 2. Fetch full-time jobs only
+    print("\n[2/3] Fetching FULL-TIME JOBS...")
+    orchestrator.run(position_type="fulltime", save_json=True)
+    
+    input("\n✓ Full-time jobs complete. Press Enter to fetch both...")
+    
+    # 3. Fetch both (to catch hybrid positions)
+    print("\n[3/3] Fetching BOTH (including hybrid positions)...")
+    orchestrator.run(position_type="both", save_json=True)
+    
+    print("\n" + "="*60)
+    print("✓ ALL SCRAPING COMPLETE")
+    print("="*60)
+    
+    # Optional: Run with custom queries
+    # orchestrator.run(
+    #     position_type="both",
+    #     jsearch_queries=["software engineer chicago", "data scientist remote"]
+    # )

@@ -1,26 +1,27 @@
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
-import os
-from dotenv import load_dotenv
+from config import Config
 from typing import Optional, List, Dict, Any
-import logging
 
-load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-
+logger = Config.logger
 def get_db_connection():
-    """Create and return a database connection."""
+    """
+    Create and return a database connection.
+    """
     try:
-        return psycopg2.connect(
-            host=os.getenv('DB_HOST'),
-            port=os.getenv('DB_PORT'),
-            database=os.getenv('DB_NAME'),
-            user=os.getenv('DB_USER'),
-            password=os.getenv('DB_PASSWORD'),
+        connection = psycopg2.connect(
+            host=Config.DB_HOST,
+            port=Config.DB_PORT,
+            database=Config.DB_NAME,
+            user=Config.DB_USER,
+            password=Config.DB_PASSWORD,
             cursor_factory=RealDictCursor
         )
+        logger.info("Connected to PRODUCTION database")
+
+        
+        return connection
+        
     except psycopg2.Error as e:
         logger.error(f"Database connection failed: {e}")
         raise
