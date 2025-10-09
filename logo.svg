@@ -1,0 +1,53 @@
+<svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="200" cy="200" r="190" fill="#4F46E5" opacity="0.1"/>
+  
+  <!-- Main Briefcase/Suitcase -->
+  <g transform="translate(200, 200)">
+    <!-- Briefcase Body -->
+    <rect x="-80" y="-40" width="160" height="100" rx="8" fill="#4F46E5"/>
+    
+    <!-- Briefcase Top Lid -->
+    <rect x="-80" y="-50" width="160" height="15" rx="4" fill="#6366F1"/>
+    
+    <!-- Handle -->
+    <path d="M -40 -50 Q -40 -70, -20 -70 L 20 -70 Q 40 -70, 40 -50" 
+          stroke="#4F46E5" stroke-width="6" fill="none" stroke-linecap="round"/>
+    
+    <!-- Lock/Clasp -->
+    <rect x="-8" y="-30" width="16" height="12" rx="2" fill="#818CF8"/>
+    <circle cx="0" cy="-24" r="3" fill="#C7D2FE"/>
+    
+    <!-- Briefcase Details/Lines -->
+    <line x1="-80" y1="-20" x2="80" y2="-20" stroke="#6366F1" stroke-width="2"/>
+    <line x1="-80" y1="10" x2="80" y2="10" stroke="#6366F1" stroke-width="2"/>
+    
+    <!-- Scale/Balance Symbol (Libra reference) -->
+    <g transform="translate(0, 20)">
+      <!-- Left Scale Pan -->
+      <ellipse cx="-35" cy="0" rx="20" ry="4" fill="#818CF8"/>
+      <line x1="-35" y1="-15" x2="-35" y2="0" stroke="#818CF8" stroke-width="2"/>
+      
+      <!-- Right Scale Pan -->
+      <ellipse cx="35" cy="0" rx="20" ry="4" fill="#818CF8"/>
+      <line x1="35" y1="-15" x2="35" y2="0" stroke="#818CF8" stroke-width="2"/>
+      
+      <!-- Center Beam -->
+      <line x1="-40" y1="-15" x2="40" y2="-15" stroke="#818CF8" stroke-width="3" stroke-linecap="round"/>
+      
+      <!-- Center Post -->
+      <line x1="0" y1="-15" x2="0" y2="-25" stroke="#818CF8" stroke-width="3"/>
+      <circle cx="0" cy="-25" r="3" fill="#C7D2FE"/>
+    </g>
+  </g>
+  
+  <!-- Text -->
+  <text x="200" y="330" font-family="Arial, sans-serif" font-size="52" font-weight="bold" 
+        text-anchor="middle" fill="#4F46E5">LIBRA</text>
+  
+  <!-- Decorative Elements -->
+  <circle cx="60" cy="80" r="4" fill="#818CF8" opacity="0.6"/>
+  <circle cx="340" cy="120" r="6" fill="#818CF8" opacity="0.4"/>
+  <circle cx="80" cy="320" r="5" fill="#818CF8" opacity="0.5"/>
+  <circle cx="320" cy="300" r="4" fill="#818CF8" opacity="0.6"/>
+</svg>
