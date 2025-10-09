@@ -49,7 +49,7 @@ jobs:
         if: failure()
         run: |
           curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":x: Libra API deploy failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          -d "{\"content\": \":x: <@755872891601551511>\nLibra API deploy failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
 
       # Step 4: Notify Discord on success
@@ -57,5 +57,5 @@ jobs:
         if: success()
         run: |
           curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":white_check_mark: Libra API deployed successfully on **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          -d "{\"content\": \":white_check_mark: <@755872891601551511>\nLibra API deployed successfully on **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}

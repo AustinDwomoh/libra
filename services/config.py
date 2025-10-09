@@ -7,6 +7,7 @@ class Config:
     SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 10
+    DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     #REMOTEOK_API_URL = "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")

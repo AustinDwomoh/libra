@@ -35,18 +35,18 @@ jobs:
             source libra/bin/activate
             git pull origin main
             pip install -r requirements.txt --upgrade-strategy only-if-needed
-            python3 /var/www/libra/services/azalea.py > azalea.log 2>&1
+            python3 -m services.azalea > azalea.log 2>&1
 
       - name: Notify Discord on failure
         if: failure()
         run: |
           curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":x: Libra job scrape failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          -d "{\"content\": \":x: <@755872891601551511>\nLibra job scrape failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
 
       - name: Notify Discord on success
         if: success()
         run: |
           curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":white_check_mark: Libra job scrape completed successfully for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          -d "{\"content\": \":white_check_mark: <@755872891601551511>\nLibra job scrape completed successfully for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
