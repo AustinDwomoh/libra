@@ -6,3 +6,4 @@ __pycache__
 *.pyc
 *.pyo
 libra/
+resources/scraped_jobs.json
