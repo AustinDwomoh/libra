@@ -1,0 +1,88 @@
+name: Simple Deploy
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to deploy (optional)'
+        required: false
+        default: ''
+      service:
+        description: 'systemd service to restart (optional)'
+        required: false
+        default: ''
+      restart_postgres:
+        description: 'Restart postgresql after deploy (true/false)'
+        required: false
+        default: 'false'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: '22'
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+
+            BRANCH="${{ github.event.inputs.branch || github.ref_name }}"
+            REMOTE_DIR="${{ secrets.REMOTE_DIR }}"
+            SERVICE="${{ github.event.inputs.service || secrets.SERVICE_NAME || 'libra' }}"
+            RESTART_POSTGRES="${{ github.event.inputs.restart_postgres || secrets.RESTART_POSTGRES || 'false' }}"
+
+            echo "[deploy] branch=$BRANCH remote_dir=$REMOTE_DIR service=$SERVICE restart_postgres=$RESTART_POSTGRES"
+
+            if [ -z "$REMOTE_DIR" ]; then
+              echo "[deploy] ERROR: REMOTE_DIR secret is not set"
+              exit 2
+            fi
+
+            cd "$REMOTE_DIR"
+            git fetch origin "$BRANCH" || true
+            git checkout "$BRANCH"
+            git pull --ff-only origin "$BRANCH"
+
+            if [ -f ./libra/bin/activate ]; then
+              # shellcheck disable=SC1091
+              source ./libra/bin/activate
+            elif [ -f ./libra/Scripts/activate ]; then
+              # shellcheck disable=SC1091
+              source ./libra/Scripts/activate
+            fi
+
+            if command -v pip >/dev/null 2>&1 && [ -f requirements.txt ]; then
+              pip install --upgrade pip setuptools wheel || true
+              pip install -r requirements.txt || true
+            fi
+
+            if [ -x ./scripts/migrate.sh ]; then
+              ./scripts/migrate.sh || true
+            fi
+
+            sudo systemctl restart "$SERVICE" || sudo systemctl restart "$SERVICE.service" || true
+
+            if [ "$RESTART_POSTGRES" = "true" ]; then
+              sudo systemctl restart postgresql || true
+            fi
+
+      - name: Notify Discord on failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \":x: Deploy failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Notify Discord on success
+        if: success()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d "{\"content\": \":white_check_mark: Deployed **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+            ${{ secrets.DISCORD_WEBHOOK }}
+ 
