@@ -1,4 +1,5 @@
-from fastapi import FastAPI, Query, HTTPException
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from services.db_manager import JobDatabase
@@ -28,6 +29,7 @@ app.add_middleware(
 @app.get("/")
 def home():
     """API home endpoint with documentation"""
+    
     return {
         "api": {
             "name": "Libra",
@@ -51,7 +53,7 @@ def home():
     }
 
 
-@app.get("/api/jobs")
+@app.get("/jobs")
 def get_jobs(
     company: Optional[str] = Query(None, description="Filter by company name"),
     sponsorship: Optional[str] = Query(None, description="Filter by sponsorship"),
@@ -85,28 +87,28 @@ def get_jobs(
     return {"success": True, "count": len(jobs), "jobs": jobs}
 
 
-@app.get("/api/jobs/company/{company_name}")
+@app.get("/jobs/company/{company_name}")
 def get_jobs_by_company(company_name: str):
     """Get all jobs from a specific company"""
-    with JobDatabase() as db:
+    with JobDatabase(auto_setup=False) as db:
         jobs = db.get_jobs_by_company(company_name)
 
     return {"success": True, "company": company_name, "count": len(jobs), "jobs": jobs}
 
 
-@app.get("/api/jobs/search/{keyword}")
+@app.get("/jobs/search/{keyword}")
 def search_jobs(keyword: str):
     """Search jobs by keyword in title or company"""
-    with JobDatabase() as db:
+    with JobDatabase(auto_setup=False) as db:
         jobs = db.search_jobs(keyword)
 
     return {"success": True, "keyword": keyword, "count": len(jobs), "jobs": jobs}
 
 
-@app.get("/api/jobs/sponsor")
+@app.get("/jobs/sponsor")
 def get_jobs_by_sponsorship():
     """Get all jobs by sponsorship status"""
-    with JobDatabase() as db:
+    with JobDatabase(auto_setup=False) as db:
         jobs = db.get_jobs_with_sponsorship()
 
     return {"success": True, "sponsorship": "likely sponsorship", "count": len(jobs), "jobs": jobs}
@@ -114,11 +116,17 @@ def get_jobs_by_sponsorship():
 
 # Error handling in FastAPI is via exceptions
 @app.exception_handler(404)
-def not_found(_, __):
-    raise HTTPException(status_code=404, detail="Endpoint not found")
+def not_found(request, exc):
+    return JSONResponse(
+        status_code=404,
+        content={"detail": "Endpoint not found"}
+    )
 
 @app.exception_handler(500)
-def internal_error(_, __):
-    raise HTTPException(status_code=500, detail="Internal server error")
+def internal_error(request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"}
+    )
 
 #uvicorn main:app --host 0.0.0.0 --port 5000 --reload
