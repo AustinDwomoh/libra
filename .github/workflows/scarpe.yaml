@@ -35,7 +35,7 @@ jobs:
             source libra/bin/activate
             git pull origin main
             pip install -r requirements.txt --upgrade-strategy only-if-needed
-            python3 /var/www/libra/azalea.py > azalea.log 2>&1
+            python3 /var/www/libra/services/azalea.py > azalea.log 2>&1
 
       - name: Notify Discord on failure
         if: failure()
