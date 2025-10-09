@@ -39,7 +39,7 @@ jobs:
             git pull origin main
 
             # Install/upgrade dependencies
-            pip install --upgrade -r requirements.txt
+            pip install -r requirements.txt --upgrade-strategy only-if-needed
 
             # Restart API with systemd
             sudo systemctl restart libra
