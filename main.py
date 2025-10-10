@@ -87,7 +87,7 @@ def get_jobs(
     return {"success": True, "count": len(jobs), "jobs": jobs}
 
 
-@app.get("/jobs/company/{company_name}")
+@app.get("/jobs/company={company_name}")
 def get_jobs_by_company(company_name: str):
     """Get all jobs from a specific company"""
     with JobDatabase(auto_setup=False) as db:
@@ -96,7 +96,7 @@ def get_jobs_by_company(company_name: str):
     return {"success": True, "company": company_name, "count": len(jobs), "jobs": jobs}
 
 
-@app.get("/jobs/search/{keyword}")
+@app.get("/jobs/search={keyword}")
 def search_jobs(keyword: str):
     """Search jobs by keyword in title or company"""
     with JobDatabase(auto_setup=False) as db:
