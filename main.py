@@ -40,10 +40,7 @@ def home():
         },
         "endpoints": {
             "GET /": "API documentation and metadata",
-            "GET /api/jobs": "Retrieve all jobs. Optional query parameters: company, sponsorship, limit",
-            "GET /api/jobs/company/{company_name}": "Retrieve all jobs from a specific company",
-            "GET /api/jobs/search/{keyword}": "Search jobs by keyword in title or company name",
-            "GET /api/jobs/sponsor": "Retrieve all jobs likely to offer visa sponsorship"
+            "GET /jobs": "Retrieve jobs with optional query parameters: company, sponsor, search, limit"
         },
         "notes": [
             "All data is read-only and updated by background scrapers.",
@@ -55,64 +52,40 @@ def home():
 
 @app.get("/jobs")
 def get_jobs(
+    limit: Optional[int] = Query(None, description="Limit number of results"),
     company: Optional[str] = Query(None, description="Filter by company name"),
-    sponsorship: Optional[str] = Query(None, description="Filter by sponsorship"),
-    limit: Optional[int] = Query(None, description="Limit number of results")
+    search: Optional[str] = Query(None, description="Search keyword in title or company"),
+    sponsor: Optional[bool] = Query(None, description="Filter by sponsorship availability")
 ):
-    """Get all scraped jobs with optional filtering"""
-    with JobDatabase() as db:
-        conditions = []
+    """Get jobs with optional filtering"""
+    with JobDatabase(auto_setup=False) as db:
+        # Start with base query
+        query = "SELECT * FROM jobs WHERE 1=1"
         params = []
-
+        
+        # Add filters based on provided parameters
         if company:
-            conditions.append("company ILIKE %s")
+            query += " AND company_name LIKE ?"
             params.append(f"%{company}%")
-
-        if sponsorship:
-            conditions.append("sponsorship = %s")
-            params.append(sponsorship)
-
-        if conditions:
-            where_clause = " AND ".join(conditions)
-            query = f"SELECT * FROM jobs WHERE {where_clause} ORDER BY created_at DESC"
-        else:
-            query = "SELECT * FROM jobs ORDER BY created_at DESC"
-
+        
+        if search:
+            query += " AND (title LIKE ? OR company_name LIKE ?)"
+            params.append(f"%{search}%")
+            params.append(f"%{search}%")
+        
+        if sponsor is True:
+            # Adjust based on how you store sponsorship data
+            query += " AND sponsorship = 1"  # or whatever your column is
+        
+        query += " ORDER BY created_at DESC"
+        
         if limit:
             query += f" LIMIT {limit}"
-
+        
         db.cursor.execute(query, params)
         jobs = db.cursor.fetchall()
-
+    
     return {"success": True, "count": len(jobs), "jobs": jobs}
-
-
-@app.get("/jobs/company={company_name}")
-def get_jobs_by_company(company_name: str):
-    """Get all jobs from a specific company"""
-    with JobDatabase(auto_setup=False) as db:
-        jobs = db.get_jobs_by_company(company_name)
-
-    return {"success": True, "company": company_name, "count": len(jobs), "jobs": jobs}
-
-
-@app.get("/jobs/search={keyword}")
-def search_jobs(keyword: str):
-    """Search jobs by keyword in title or company"""
-    with JobDatabase(auto_setup=False) as db:
-        jobs = db.search_jobs(keyword)
-
-    return {"success": True, "keyword": keyword, "count": len(jobs), "jobs": jobs}
-
-
-@app.get("/jobs/sponsor")
-def get_jobs_by_sponsorship():
-    """Get all jobs by sponsorship status"""
-    with JobDatabase(auto_setup=False) as db:
-        jobs = db.get_jobs_with_sponsorship()
-
-    return {"success": True, "sponsorship": "likely sponsorship", "count": len(jobs), "jobs": jobs}
-
 
 # Error handling in FastAPI is via exceptions
 @app.exception_handler(404)
