@@ -49,12 +49,9 @@ def home():
         ]
     }
 
-
 @app.get("/jobs")
 def get_jobs(
     limit: Optional[int] = Query(None, description="Limit number of results"),
-    company: Optional[str] = Query(None, description="Filter by company name"),
-    search: Optional[str] = Query(None, description="Search keyword in title or company"),
     sponsor: Optional[bool] = Query(None, description="Filter by sponsorship availability")
 ):
     """Get jobs with optional filtering"""
@@ -62,16 +59,6 @@ def get_jobs(
         # Start with base query
         query = "SELECT * FROM jobs WHERE 1=1"
         params = []
-        
-        # Add filters based on provided parameters
-        if company:
-            query += " AND company_name LIKE ?"
-            params.append(f"%{company}%")
-        
-        if search:
-            query += " AND (title LIKE ? OR company_name LIKE ?)"
-            params.append(f"%{search}%")
-            params.append(f"%{search}%")
         
         if sponsor is True:
             # Adjust based on how you store sponsorship data
@@ -86,6 +73,34 @@ def get_jobs(
         jobs = db.cursor.fetchall()
     
     return {"success": True, "count": len(jobs), "jobs": jobs}
+
+
+
+@app.get("/jobs/company/")
+def get_jobs_by_company(company_name: str,limit: Optional[int] = Query(None, description="Limit number of results")):
+    """Get all jobs from a specific company"""
+    with JobDatabase(auto_setup=False) as db:
+        jobs = db.get_jobs_by_company(company_name)
+
+    return {"success": True, "company": company_name, "count": len(jobs), "jobs": jobs}
+
+
+@app.get("/jobs/search/{keyword}")
+def search_jobs(keyword: str):
+    """Search jobs by keyword in title or company"""
+    with JobDatabase(auto_setup=False) as db:
+        jobs = db.search_jobs(keyword)
+
+    return {"success": True, "keyword": keyword, "count": len(jobs), "jobs": jobs}
+
+
+@app.get("/jobs/sponsor")
+def get_jobs_by_sponsorship():
+    """Get all jobs by sponsorship status"""
+    with JobDatabase(auto_setup=False) as db:
+        jobs = db.get_jobs_with_sponsorship()
+
+    return {"success": True, "sponsorship": "likely sponsorship", "count": len(jobs), "jobs": jobs}
 
 # Error handling in FastAPI is via exceptions
 @app.exception_handler(404)
