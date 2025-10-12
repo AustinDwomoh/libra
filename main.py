@@ -40,7 +40,10 @@ def home():
         },
         "endpoints": {
             "GET /": "API documentation and metadata",
-            "GET /jobs": "Retrieve jobs with optional query parameters: company, sponsor, search, limit"
+            "GET /jobs": "Retrieve jobs with optional query parameters: limit(?limit=10)",
+            "GET /jobs/company/{company_name}": "Get jobs by company name with optional limit",
+            "GET /jobs/search/{keyword}": "Search jobs by keyword in title or company",
+            "GET /jobs/sponsor": "Get all jobs with likely sponsorship"
         },
         "notes": [
             "All data is read-only and updated by background scrapers.",
@@ -51,38 +54,48 @@ def home():
 
 @app.get("/jobs")
 def get_jobs(
-    limit: Optional[int] = Query(None, description="Limit number of results"),
-    sponsor: Optional[bool] = Query(None, description="Filter by sponsorship availability")
+    limit: Optional[int] = Query(None, description="Limit number of results")
+    
 ):
     """Get jobs with optional filtering"""
     with JobDatabase(auto_setup=False) as db:
-        # Start with base query
         query = "SELECT * FROM jobs WHERE 1=1"
         params = []
-        
-        if sponsor is True:
-            # Adjust based on how you store sponsorship data
-            query += " AND sponsorship = 1"  # or whatever your column is
-        
         query += " ORDER BY created_at DESC"
-        
         if limit:
             query += f" LIMIT {limit}"
-        
         db.cursor.execute(query, params)
         jobs = db.cursor.fetchall()
     
-    return {"success": True, "count": len(jobs), "jobs": jobs}
+    return {
+        "success": True,
+        "params": {
+            "limit": limit,
+        },
+        "jobs": jobs
+    }
 
 
-
-@app.get("/jobs/company/")
-def get_jobs_by_company(company_name: str,limit: Optional[int] = Query(None, description="Limit number of results")):
+@app.get("/jobs/company/{company_name}")
+def get_jobs_by_company(
+    company_name: str,
+    limit: Optional[int] = Query(None, description="Limit number of results")
+):
     """Get all jobs from a specific company"""
     with JobDatabase(auto_setup=False) as db:
         jobs = db.get_jobs_by_company(company_name)
+        
+        if limit:
+            jobs = jobs[:limit]
 
-    return {"success": True, "company": company_name, "count": len(jobs), "jobs": jobs}
+    return {
+        "success": True,
+        "params": {
+            "company_name": company_name,
+            "limit": limit
+        },
+        "jobs": jobs
+    }
 
 
 @app.get("/jobs/search/{keyword}")
@@ -91,7 +104,13 @@ def search_jobs(keyword: str):
     with JobDatabase(auto_setup=False) as db:
         jobs = db.search_jobs(keyword)
 
-    return {"success": True, "keyword": keyword, "count": len(jobs), "jobs": jobs}
+    return {
+        "success": True,
+        "params": {
+            "keyword": keyword
+        },
+        "jobs": jobs
+    }
 
 
 @app.get("/jobs/sponsor")
@@ -100,21 +119,27 @@ def get_jobs_by_sponsorship():
     with JobDatabase(auto_setup=False) as db:
         jobs = db.get_jobs_with_sponsorship()
 
-    return {"success": True, "sponsorship": "likely sponsorship", "count": len(jobs), "jobs": jobs}
+    return {
+        "success": True,
+        "params": {
+            "sponsorship": "likely sponsorship"
+        },
+        "jobs": jobs
+    }
 
 # Error handling in FastAPI is via exceptions
 @app.exception_handler(404)
 def not_found(request, exc):
     return JSONResponse(
         status_code=404,
-        content={"detail": "Endpoint not found"}
+        content={"success": False, "detail": "Endpoint not found"}
     )
 
 @app.exception_handler(500)
 def internal_error(request, exc):
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error"}
+        content={"success": False, "detail": "Internal server error"}
     )
 
 #uvicorn main:app --host 0.0.0.0 --port 5000 --reload

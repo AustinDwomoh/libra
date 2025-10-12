@@ -50,10 +50,8 @@ class JobDatabase:
         Creates table if missing, migrates if schema is outdated.
         """
         try:
-            # First, create table if it doesn't exist
             self._create_jobs_table_if_not_exists()
-            
-            # Then check if it needs migration
+
             self.cursor.execute("""
                 SELECT column_name 
                 FROM information_schema.columns 

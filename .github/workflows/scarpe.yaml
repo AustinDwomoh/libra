@@ -42,10 +42,3 @@ jobs:
           curl -H "Content-Type: application/json" \
           -d "{\"content\": \":x: <@755872891601551511>\nLibra job scrape failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
-
-      - name: Notify Discord on success
-        if: success()
-        run: |
-          curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":white_check_mark: <@755872891601551511>\nLibra job scrape completed successfully for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
-          ${{ secrets.DISCORD_WEBHOOK }}
