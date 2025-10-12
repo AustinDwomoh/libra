@@ -1,8 +1,8 @@
 
-import os,logging,enum
+import os,logging
 from dotenv import load_dotenv
 load_dotenv()
-class Config(enum.Enum):
+class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
