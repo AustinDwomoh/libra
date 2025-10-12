@@ -1,13 +1,12 @@
 
-import os,logging
+import os,logging,enum
 from dotenv import load_dotenv
 load_dotenv()
-class Config:
+class Config(enum.Enum):
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 10
-    DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     #REMOTEOK_API_URL = "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")

@@ -287,11 +287,6 @@ if __name__ == "__main__":
         orchestrator.run(position_type="intern", save_json=True)
         summary.append("✅ Internships complete")
 
-        orchestrator.run(position_type="fulltime", save_json=True)
-        summary.append("✅ Full-time jobs complete")
-
-        orchestrator.run(position_type="both", save_json=True)
-        summary.append("✅ Both/hybrid positions complete")
 
       
         message = (f"<@755872891601551511>\n"
