@@ -33,7 +33,7 @@ class Azalea_:
         # initialize a persistent stats dict used across methods
         self.stats = {
             'simplify': 0,
-            'jsearch': 0,
+            #'jsearch': 0,
             # 'remoteok': 0,
             'total_fetched': 0,
             'unique_jobs': 0,
@@ -48,14 +48,13 @@ class Azalea_:
         """Initialize all helper classes for job sources"""
         self.helpers['simplify'] = SimplifyHelper()
         logger.info("✓ Simplify helper initialized")
-        """ j_search_key = Config.J_SEARCH_API_KEY
-        print(f"JSearch API Key: {j_search_key}")
+        j_search_key = Config.J_SEARCH_API_KEY
+        #print(f"JSearch API Key: {j_search_key}")
         if j_search_key:
-            
             self.helpers['jsearch'] = JSearchHelper()
             logger.info("✓ JSearch helper initialized")
         else:
-            logger.warning("⚠ JSearch API key not found. JSearch scraping disabled.") """
+            logger.warning("⚠ JSearch API key not found. JSearch scraping disabled.")
     
     def fetch_from_source(self, source: str, position_type: str = "intern",date_posted: str = "week", **kwargs) -> List[Dict]:
         """
