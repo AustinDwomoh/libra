@@ -1,0 +1,243 @@
+-- Companies table
+CREATE TABLE companies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    domain TEXT,
+    industry TEXT,
+    size TEXT,
+    revenue TEXT,
+    location TEXT,
+    forbes_rank INTEGER,
+    fortune_rank INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Jobs table
+CREATE TABLE jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER,
+    title TEXT NOT NULL,
+    location TEXT,
+    job_type TEXT,
+    posted_date DATE,
+    source TEXT,
+    url TEXT,
+    description TEXT,
+    
+    -- Sponsorship fields
+    visa_sponsorship BOOLEAN,
+    h1b_sponsor BOOLEAN,
+    opt_friendly BOOLEAN,
+    sponsorship_details TEXT,
+    
+    FOREIGN KEY (company_id) REFERENCES companies(id)
+);
+
+-- Sponsorship tracking
+CREATE TABLE sponsorship_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER,
+    year INTEGER,
+    h1b_applications INTEGER,
+    h1b_approvals INTEGER,
+    source TEXT,
+    FOREIGN KEY (company_id) REFERENCES companies(id)
+);
+
+import re
+
+def extract_sponsorship_info(job_description):
+    """
+    Extract visa sponsorship information from job description
+    """
+    description_lower = job_description.lower()
+    
+    sponsorship_data = {
+        'visa_sponsorship': False,
+        'h1b_sponsor': False,
+        'opt_friendly': False,
+        'sponsorship_details': None
+    }
+    
+    # Positive indicators
+    positive_patterns = [
+        r'visa sponsor(ship)?',
+        r'h-?1b sponsor',
+        r'will sponsor',
+        r'provides sponsorship',
+        r'opt.*welcome',
+        r'cpt.*welcome',
+        r'eligible for sponsorship'
+    ]
+    
+    # Negative indicators
+    negative_patterns = [
+        r'no.*visa sponsor',
+        r'not.*sponsor',
+        r'citizen.*required',
+        r'must be authorized to work',
+        r'no sponsorship available'
+    ]
+    
+    # Check patterns
+    for pattern in positive_patterns:
+        if re.search(pattern, description_lower):
+            sponsorship_data['visa_sponsorship'] = True
+            if 'h1b' in pattern or 'h-1b' in pattern:
+                sponsorship_data['h1b_sponsor'] = True
+            if 'opt' in pattern:
+                sponsorship_data['opt_friendly'] = True
+            break
+    
+    for pattern in negative_patterns:
+        if re.search(pattern, description_lower):
+            sponsorship_data['visa_sponsorship'] = False
+            sponsorship_data['h1b_sponsor'] = False
+            break
+    
+    # Extract sponsorship text snippet
+    sponsorship_context = re.search(
+        r'.{0,100}(visa|sponsor|h1b|opt|cpt|work authorization).{0,100}',
+        description_lower,
+        re.IGNORECASE
+    )
+    
+    if sponsorship_context:
+        sponsorship_data['sponsorship_details'] = sponsorship_context.group(0).strip()
+    
+    return sponsorship_data
+
+
+    import csv
+import sqlite3
+
+def import_companies_from_csv(csv_path, db_path):
+    """
+    Import companies from Forbes/Fortune CSV
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        
+        for row in reader:
+            cursor.execute('''
+                INSERT OR IGNORE INTO companies 
+                (name, industry, revenue, forbes_rank, location)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (
+                row.get('Company'),
+                row.get('Industry'),
+                row.get('Revenue'),
+                row.get('Rank'),
+                row.get('Location')
+            ))
+    
+    conn.commit()
+    conn.close()
+
+def link_job_to_company(job_company_name, db_path):
+    """
+    Find or create company and return company_id
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # Try exact match first
+    cursor.execute('SELECT id FROM companies WHERE name = ?', (job_company_name,))
+    result = cursor.fetchone()
+    
+    if result:
+        return result[0]
+    
+    # Try fuzzy match (you might want to use fuzzywuzzy library)
+    cursor.execute('SELECT id, name FROM companies')
+    companies = cursor.fetchall()
+    
+    # Simple fuzzy matching
+    from difflib import SequenceMatcher
+    best_match = None
+    best_ratio = 0
+    
+    for company_id, company_name in companies:
+        ratio = SequenceMatcher(None, job_company_name.lower(), company_name.lower()).ratio()
+        if ratio > best_ratio and ratio > 0.8:  # 80% similarity threshold
+            best_ratio = ratio
+            best_match = company_id
+    
+    if best_match:
+        return best_match
+    
+    # Create new company if no match
+    cursor.execute('INSERT INTO companies (name) VALUES (?)', (job_company_name,))
+    conn.commit()
+    company_id = cursor.lastrowid
+    conn.close()
+    
+    return company_id
+
+    def process_job_with_company_and_sponsorship(job_data, db_path):
+    """
+    Process job: link to company, extract sponsorship, save to DB
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 1. Get or create company
+    company_id = link_job_to_company(job_data['company_name'], db_path)
+    
+    # 2. Extract sponsorship info
+    sponsorship_info = extract_sponsorship_info(job_data['description'])
+    
+    # 3. Insert job with company link and sponsorship data
+    cursor.execute('''
+        INSERT INTO jobs 
+        (company_id, title, location, job_type, description, 
+         visa_sponsorship, h1b_sponsor, opt_friendly, sponsorship_details, url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        company_id,
+        job_data['title'],
+        job_data['location'],
+        job_data['job_type'],
+        job_data['description'],
+        sponsorship_info['visa_sponsorship'],
+        sponsorship_info['h1b_sponsor'],
+        sponsorship_info['opt_friendly'],
+        sponsorship_info['sponsorship_details'],
+        job_data['url']
+    ))
+    
+    conn.commit()
+    conn.close()
+    
+    return company_id
+
+
+
+    def get_jobs_with_sponsorship():
+    """
+    Get all jobs that offer visa sponsorship with company details
+    """
+    conn = sqlite3.connect('jobs.db')
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT 
+            c.name as company_name,
+            c.industry,
+            c.revenue,
+            j.title,
+            j.location,
+            j.visa_sponsorship,
+            j.h1b_sponsor,
+            j.sponsorship_details,
+            j.url
+        FROM jobs j
+        JOIN companies c ON j.company_id = c.id
+        WHERE j.visa_sponsorship = 1
+        ORDER BY c.forbes_rank ASC NULLS LAST
+    ''')
+    
+    return cursor.fetchall()

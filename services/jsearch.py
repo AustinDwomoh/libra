@@ -48,7 +48,7 @@ class JSearchHelper:
         params = {
             "query": search_query,
             "page": page,
-            "num_pages": "1",
+            "num_pages": "10",
             "date_posted": date_posted  # Add date filter here
         }
         
@@ -85,6 +85,10 @@ class JSearchHelper:
                 response.raise_for_status()
                 data = response.json()
                 jobs = data.get("data", [])
+                print("Jobs found:", len(jobs))
+                with open("jsearch_raw_jobs.json", "w", encoding="utf-8") as f:
+                    import json
+                    json.dump(jobs, f, ensure_ascii=False, indent=4)
                 
                 # Filter by employment type
                 filtered_jobs = []
@@ -235,3 +239,11 @@ class JSearchHelper:
         
         return self.fetch_jobs(custom_queries=queries, position_type=position_type)
    
+if __name__ == "__main__":
+
+    jsearch_helper = JSearchHelper()
+    jobs = jsearch_helper.fetch_positions(query="software engineer", position_type="intern", date_posted="week")
+    print("Jobs found:", len(jobs))
+    with open("jsearch_jobs.json", "w", encoding="utf-8") as f:
+        import json
+        json.dump(jobs, f, ensure_ascii=False, indent=4)

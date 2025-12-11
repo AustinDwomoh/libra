@@ -6,10 +6,10 @@ class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
-    REQUEST_TIMEOUT = 10
+    REQUEST_TIMEOUT = 30
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     #REMOTEOK_API_URL = "https://remoteok.com/api"
-    J_SEARCH_API_KEY = None #os.getenv("JSearch_API_Key")
+    J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
     logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     DB_HOST = os.getenv("DB_HOST")
