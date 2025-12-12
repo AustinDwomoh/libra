@@ -13,12 +13,15 @@ Key improvements:
 from dataclasses import dataclass, field
 from typing import Optional, Dict, List
 import requests
+
 from services.constants import (
     Defaults, 
     CompanyValidation, 
     PositionType, 
     HTTPStatus
 )
+
+
 
 
 @dataclass
@@ -29,6 +32,7 @@ class Company:
     """
     name: str
     location: str
+    db_id: Optional[int] = None
     industry: Optional[int] = Defaults.DEFAULT_INDUSTRY
     sponsorships: bool = Defaults.DEFAULT_SPONSORSHIP
     company_url: Optional[str] = None
@@ -152,8 +156,9 @@ class Company:
     def from_dict(cls, data: Dict) -> 'Company':
         """Create Company from dictionary"""
         return cls(
-            name=data.get("name", Defaults.UNKNOWN_COMPANY),
+            name=data.get("normalized_name", Defaults.UNKNOWN_COMPANY),
             location=data.get("location", Defaults.UNKNOWN_LOCATION),
+            db_id=data.get("id"),
             industry=data.get("industry"),
             sponsorships=data.get("sponsorships", False),
             company_url=data.get("company_url")
@@ -192,12 +197,12 @@ class Job:
         
         if not self.location:
             self.location = self.company.location or Defaults.UNKNOWN_LOCATION
-
+       
     def get_job_info(self) -> str:
         """Get formatted job information"""
+       
         return (
             f"Job: {self.title} | "
-            f"Company: {self.company.name} | "
             f"Location: {self.location} | "
             f"Remote: {'Yes' if self.is_remote else 'No'} | "
             f"Type: {self.role_type}"
@@ -235,11 +240,11 @@ class Job:
         """Convert to dictionary for database storage"""
         return {
             "title": self.title,
-            "company": self.company.name,
+            "company": self.company.db_id,
             "location": self.location,
             "link": self.apply_url or self.google_link,
             "sponsorship": (
-                "Likely sponsorship" if self.company.sponsorships 
+                "Likely sponsorship" if self.company.is_sponsored()
                 else "No record found"
             ),
             "source": self.source,
@@ -252,22 +257,15 @@ class Job:
             "salary_range": self.pay_range,
         }
 
-    @staticmethod
-    def _to_job_object(job: dict) -> 'Job':
+    @classmethod
+    def to_job_object(cls, job: dict) -> 'Job':
         """
         Convert raw job dictionary into a Job dataclass.
         This is used when parsing API responses.
         """
-        # Create company object
-        company_obj = Company(
-            name=job.get("company", Defaults.UNKNOWN_COMPANY),
-            location=job.get("location", Defaults.UNKNOWN_LOCATION),
-            industry=job.get("industry", Defaults.DEFAULT_INDUSTRY),
-            sponsorships=job.get("sponsorships", Defaults.DEFAULT_SPONSORSHIP),
-            company_url=job.get("company_url") or job.get("link", "")
-        )
-        
-        # Extract salary range
+  
+      
+        # Extract salagery range
         salary_range = job.get("salary_range")
         if salary_range and isinstance(salary_range, (tuple, list)) and len(salary_range) == 2:
             pay_range = tuple(salary_range)
@@ -275,9 +273,9 @@ class Job:
             pay_range = None
         
         # Create job object
-        return Job(
+        return cls(
             title=job.get("title", ""),
-            company=company_obj,
+            company=job.get("company_id", Defaults.UNKNOWN_COMPANY),
             location=job.get("location", Defaults.UNKNOWN_LOCATION),
             is_remote=job.get("remote", False),
             description=job.get("description", ""),
@@ -290,43 +288,23 @@ class Job:
             source=job.get("source", "unknown"),
             tags=job.get("tags", [])
         )
-
-    @classmethod
-    def from_dict(cls, data: Dict) -> 'Job':
-        """Create Job from dictionary (e.g., from database)"""
-        # Reconstruct company
-        company = Company(
-            name=data.get("company", Defaults.UNKNOWN_COMPANY),
-            location=data.get("location", Defaults.UNKNOWN_LOCATION),
-            sponsorships=(data.get("sponsorship") == "Likely sponsorship")
+    
+    def get_company(self) -> Company:
+        """Get associated Company object"""
+        return self.company
+    
+    def __eq__(self, value):
+        """Equality check based on title, company, and location"""
+        if not isinstance(value, Job):
+            return False
+        return (
+            self.title == value.title and
+            self.company.fuzzy_match(value.company) and
+            self.location == value.location and self.description == value.description and
+            self.apply_url == value.apply_url
+            and self.google_link == value.google_link
         )
-        
-        return cls(
-            title=data.get("title", ""),
-            company=company,
-            location=data.get("location", Defaults.UNKNOWN_LOCATION),
-            is_remote=data.get("remote", False),
-            description=data.get("description", ""),
-            apply_url=data.get("link"),
-            role_type=data.get("role_type", PositionType.OTHER.value),
-            pay_range=data.get("salary_range"),
-            date_posted=data.get("date_posted"),
-            source=data.get("source", "unknown"),
-            tags=data.get("tags", [])
-        )
+  
 
 
-# Utility functions for job/company operations
-def normalize_company_name(name: str) -> str:
-    """Standalone function to normalize company names"""
-    return Company._normalize_name(name)
 
-
-def create_job_from_api(api_response: Dict, source: str = "api") -> Job:
-    """
-    Factory function to create Job from API response.
-    Handles different API formats.
-    """
-    job_dict = api_response.copy()
-    job_dict["source"] = source
-    return Job._to_job_object(job_dict)

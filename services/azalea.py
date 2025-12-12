@@ -6,6 +6,8 @@ import os
 from typing import List, Dict, Optional
 from dataclasses import dataclass, field
 
+from services.companies import Company, Job
+from services.company_db import CompanyDatabase
 from services.sponsor import SponsorshipDB
 from services.db_manager import JobDatabase
 from services.config import Config
@@ -72,7 +74,7 @@ class JobStats:
             self.remoteok += count
 
 
-class Azalea_:
+class Azalea:
     """Main orchestrator/controller for job scraping operations"""
     
     def __init__(self):
@@ -80,6 +82,7 @@ class Azalea_:
         self.helpers: Dict[str, any] = {}
         self.stats = JobStats()
         self._init_helpers()
+        self.company_cache: set[Company] = set()
     
     def _init_helpers(self):
         """Initialize all helper classes for job sources"""
@@ -172,7 +175,7 @@ class Azalea_:
         
         return all_jobs
     
-    def deduplicate_jobs(self, jobs: List[Dict]) -> List[Dict]:
+    def deduplicate_jobs(self, jobs: List[Job]) -> List[Job]:
         """Remove duplicate jobs based on company + title + location"""
         seen = set()
         unique_jobs = []
@@ -184,7 +187,7 @@ class Azalea_:
                 seen.add(key)
                 unique_jobs.append(job)
         
-        duplicates_removed = len(jobs) - len(unique_jobs)
+        
         self.stats.unique_jobs = len(unique_jobs)
         
         logger.info(LogMessages.deduplication_result(len(jobs), len(unique_jobs)))
@@ -290,7 +293,8 @@ class Azalea_:
             self.stats.position_type = position_type
             
             all_jobs = self._fetch_jobs(sources, position_type, jsearch_queries, date_posted)
-            
+            #probably not the best place for this but whatever
+            self.company_cache.add(CompanyDatabase.get_all_sponsors()) # Preload company cache
             if not all_jobs:
                 logger.warning("No jobs found to process")
                 return self.stats.to_dict()
@@ -301,6 +305,7 @@ class Azalea_:
             self.jobs = unique_jobs
             
             # Step 3: Tag with sponsorship info
+            #TODO: SInce the company db now has sponsorship info, consider integrating that in the helpers directly
             self._log_section("TAGGING SPONSORSHIP")
             self.tag_sponsorship(unique_jobs, use_fuzzy)
             

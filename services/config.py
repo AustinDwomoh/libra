@@ -7,6 +7,8 @@ class Config:
     SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 30
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    GOOGLE_CX = os.getenv("GOOGLE_CX")
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     #REMOTEOK_API_URL = "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")

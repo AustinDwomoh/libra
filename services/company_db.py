@@ -9,20 +9,28 @@ Tracks:
     sponsors_visas boolean (derived from certified evidence)
 """
 
+import math
+import re
+import time
+import requests
 import psycopg2
 from psycopg2.extras import execute_values
 from typing import Optional, List, Dict, Set
 from pathlib import Path
 import pandas as pd
 from rapidfuzz import fuzz, process
-
 from services.config import Config
+from collections import Counter
+from dataclasses import dataclass
+from services.companies import Company
 from services.constants import (
     CompanyValidation,
     CSVConfig,
     VisaConfig,
     FuzzyMatchConfig,
 )
+from services.db_manager import get_db_connection
+from services.parentRoslver import ParentBrandResolver
 
 logger = Config.logger
 
@@ -31,10 +39,15 @@ logger = Config.logger
 # COMPANY DATABASE
 # ======================================================================
 
+
 class CompanyDatabase:
     """
     Database manager for H1B sponsorship data.
-    Uses real certified case counts to determine sponsorship reliability.
+
+    Identity model:
+        - raw company names are resolved to a parent brand when confident
+        - aggregation happens at the parent-brand level
+        - normalization is conservative fallback only
     """
 
     def __init__(self, connection=None):
@@ -48,33 +61,32 @@ class CompanyDatabase:
             self.cursor = self.conn.cursor()
             self.owns_connection = True
 
+        self.resolver = ParentBrandResolver()
         self._ensure_table_exists()
 
     # ==================================================================
     # SCHEMA + TRIGGERS
     # ==================================================================
     def _ensure_table_exists(self):
-        """Create table + triggers if missing."""
-
         create_table_sql = """
         CREATE TABLE IF NOT EXISTS companies (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
             -- identity
             name TEXT NOT NULL,
-            normalized_name TEXT NOT NULL UNIQUE,
+            normalized_name TEXT NOT NULL,
+            parent_brand TEXT,
+
             location TEXT,
-            industry INTEGER,
+            industry TEXT,
 
-            -- evidence-based H1B tracking
-            sponsorship_cases INTEGER DEFAULT 0,   -- total filings
-            approved_cases INTEGER DEFAULT 0,      -- certified approvals
+            -- visa evidence
+            sponsorship_cases INTEGER DEFAULT 0,
+            approved_cases INTEGER DEFAULT 0,
 
-            -- auto-derived fields
             approval_rate NUMERIC DEFAULT 0,
             reliability_score NUMERIC DEFAULT 0,
 
-            -- binary sponsorship decision
             sponsors_visas BOOLEAN DEFAULT FALSE,
 
             company_url TEXT,
@@ -86,7 +98,6 @@ class CompanyDatabase:
         );
         """
 
-        # Timestamp trigger
         timestamp_fn = """
         CREATE OR REPLACE FUNCTION update_companies_timestamp_fn()
         RETURNS TRIGGER AS $$
@@ -97,20 +108,10 @@ class CompanyDatabase:
         $$ LANGUAGE plpgsql;
         """
 
-        timestamp_trigger = """
-        DROP TRIGGER IF EXISTS trg_update_timestamp ON companies;
-        CREATE TRIGGER trg_update_timestamp
-        BEFORE UPDATE ON companies
-        FOR EACH ROW
-        EXECUTE FUNCTION update_companies_timestamp_fn();
-        """
-
-        # Rating trigger
         rating_fn = """
         CREATE OR REPLACE FUNCTION update_company_rating()
         RETURNS TRIGGER AS $$
         BEGIN
-            -- approval rate
             IF NEW.sponsorship_cases > 0 THEN
                 NEW.approval_rate :=
                     NEW.approved_cases::NUMERIC / NEW.sponsorship_cases;
@@ -118,7 +119,6 @@ class CompanyDatabase:
                 NEW.approval_rate := 0;
             END IF;
 
-            -- reliability score (0–100)
             NEW.reliability_score :=
                   (0.6 * LEAST(NEW.approved_cases / 10.0, 1.0) * 100)
                 + (0.4 * NEW.approval_rate * 100)
@@ -129,107 +129,129 @@ class CompanyDatabase:
         $$ LANGUAGE plpgsql;
         """
 
-        rating_trigger = """
+        triggers = """
+        DROP TRIGGER IF EXISTS trg_update_timestamp ON companies;
+        CREATE TRIGGER trg_update_timestamp
+        BEFORE UPDATE ON companies
+        FOR EACH ROW EXECUTE FUNCTION update_companies_timestamp_fn();
+
         DROP TRIGGER IF EXISTS trg_update_company_rating ON companies;
         CREATE TRIGGER trg_update_company_rating
         BEFORE INSERT OR UPDATE ON companies
-        FOR EACH ROW
-        EXECUTE FUNCTION update_company_rating();
+        FOR EACH ROW EXECUTE FUNCTION update_company_rating();
         """
+
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_companies_norm ON companies(normalized_name);",
+            "CREATE UNIQUE INDEX IF NOT EXISTS uniq_parent_brand ON companies(parent_brand) WHERE parent_brand IS NOT NULL;",
+            "CREATE INDEX IF NOT EXISTS idx_companies_cases ON companies(sponsorship_cases DESC);",
+            "CREATE INDEX IF NOT EXISTS idx_companies_sponsors ON companies(sponsors_visas);",
+        ]
 
         try:
             self.cursor.execute(create_table_sql)
             self.cursor.execute(timestamp_fn)
-            self.cursor.execute(timestamp_trigger)
             self.cursor.execute(rating_fn)
-            self.cursor.execute(rating_trigger)
-
-            # indexes
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_companies_normalized_name ON companies(normalized_name);",
-                "CREATE INDEX IF NOT EXISTS idx_companies_sponsors ON companies(sponsors_visas);",
-                "CREATE INDEX IF NOT EXISTS idx_companies_cases ON companies(sponsorship_cases DESC);",
-            ]
+            self.cursor.execute(triggers)
             for idx in indexes:
                 self.cursor.execute(idx)
-
             self.conn.commit()
-
-        except psycopg2.Error as e:
+        except Exception as e:
             self.conn.rollback()
-            raise RuntimeError(f"DB init error: {e}")
-
+            raise RuntimeError(f"DB init failed: {e}")
     # ==================================================================
     # HELPERS
     # ==================================================================
     @staticmethod
     def normalize_company_name(name: str) -> str:
+        
         if name is None:
             return ""
-        if not isinstance(name, str):
-            name = str(name)
 
-        normalized = name.lower().strip()
+        # Catch pandas NaN / float NaN
+        if isinstance(name, float) and math.isnan(name):
+            return ""
 
-        for term in CompanyValidation.NORMALIZATION_TERMS:
-            normalized = normalized.replace(term, "")
+        # Defensive: coerce everything else to string
+        name = str(name).strip()
+        if not name:
+            return ""
+        
 
-        return " ".join(normalized.split())
-
+        text = re.sub(r"[^\w\s]", " ", name.lower()).strip()
+        tokens = [
+            t for t in text.split()
+            if t not in CompanyValidation.NORMALIZATION_TERMS
+        ]
+        return " ".join(tokens)
     # ==================================================================
     # BULK UPSERT — CORE LOGIC
     # ==================================================================
     def bulk_add_companies(self, companies: List[Dict]) -> int:
-        """
-        Accepts list of:
-            {
-                name: str,
-                total_cases: int,
-                approved_cases: int
-            }
-        """
-
         if not companies:
             return 0
 
-        merged = {}
+        merged: Dict[str, Dict] = {}
 
-        # merge duplicates
-        for c in companies:
-            name = c.get("name")
-            if not name:
+        for row in companies:
+            time.sleep(0.05)  # to avoid rate limiting
+            raw_name = row.get("name")
+            if raw_name is None:
                 continue
 
-            norm = self.normalize_company_name(name)
-            total = int(c.get("total_cases", 0))
-            approved = int(c.get("approved_cases", 0))
+            # Catch pandas NaN / float NaN
+            if isinstance(raw_name, float) and math.isnan(raw_name):
+                continue
+            # Defensive: coerce everything else to string
+            name = str(raw_name).strip()
+            if not name:
+                continue
+            
 
-            if norm not in merged:
-                merged[norm] = {
-                    "name": name,
-                    "normalized_name": norm,
-                    "location": c.get("location"),
-                    "industry": c.get("industry"),
-                    "company_url": c.get("company_url"),
+            resolution = self.resolver.resolve(raw_name)
+            print(resolution)
+            
+            if resolution.parent_brand and resolution.confidence >= 0.8:
+                merge_key = resolution.parent_brand.lower()
+                display_name = resolution.parent_brand
+                parent_brand = resolution.parent_brand
+                print(f"Resolved '{raw_name}' → '{parent_brand}' (conf={resolution.confidence:.2f})")
+                print(f"Domains: {resolution.domains}")
+            else:
+                merge_key = self.normalize_company_name(raw_name)
+                display_name = raw_name
+                parent_brand = None
+
+            total = int(row.get("total_cases", 0))
+            approved = int(row.get("approved_cases", 0))
+
+            if merge_key not in merged:
+                merged[merge_key] = {
+                    "name": display_name,
+                    "normalized_name": merge_key,
+                    "parent_brand": parent_brand,
                     "sponsorship_cases": total,
                     "approved_cases": approved,
                 }
             else:
-                merged[norm]["sponsorship_cases"] += total
-                merged[norm]["approved_cases"] += approved
+                merged[merge_key]["sponsorship_cases"] += total
+                merged[merge_key]["approved_cases"] += approved
 
-        # sponsor decision rule
-        for c in merged.values():
-            c["sponsors_visas"] = (c["approved_cases"] >= 3)
+        for m in merged.values():
+            m["sponsors_visas"] = m["approved_cases"] >= 3
 
         query = """
         INSERT INTO companies (
-            name, normalized_name, location, industry, company_url,
-            sponsorship_cases, approved_cases, sponsors_visas
+            name,
+            normalized_name,
+            parent_brand,
+            sponsorship_cases,
+            approved_cases,
+            sponsors_visas
         )
         VALUES %s
-        ON CONFLICT (normalized_name) DO UPDATE
-        SET
+        ON CONFLICT (parent_brand)
+        DO UPDATE SET
             sponsorship_cases = companies.sponsorship_cases + EXCLUDED.sponsorship_cases,
             approved_cases = companies.approved_cases + EXCLUDED.approved_cases,
             sponsors_visas = (companies.approved_cases + EXCLUDED.approved_cases) >= 3,
@@ -240,9 +262,7 @@ class CompanyDatabase:
             (
                 c["name"],
                 c["normalized_name"],
-                c["location"],
-                c["industry"],
-                c["company_url"],
+                c["parent_brand"],
                 c["sponsorship_cases"],
                 c["approved_cases"],
                 c["sponsors_visas"],
@@ -254,11 +274,9 @@ class CompanyDatabase:
             execute_values(self.cursor, query, data, page_size=1000)
             self.conn.commit()
             return self.cursor.rowcount
-
-        except psycopg2.Error as e:
+        except Exception as e:
             self.conn.rollback()
             raise RuntimeError(f"Bulk insert failed: {e}")
-
     # ==================================================================
     # CSV IMPORT (CERTIFIED CASES ONLY)
     # ==================================================================
@@ -267,30 +285,40 @@ class CompanyDatabase:
         if df is None:
             raise RuntimeError("Failed to load CSV file.")
 
-        df = df.rename(columns={
-            "Employer (Petitioner) Name": "employer",
-            "New Employment Approval": "new_emp_approval",
-            "New Employment Denial": "new_emp_denial",
-            "Continuation Approval": "cont_approval",
-            "Continuation Denial": "cont_denial",
-            "Change with Same Employer Approval": "same_emp_approval",
-            "Change with Same Employer Denial": "same_emp_denial",
-            "New Concurrent Approval": "new_conc_approval",
-            "New Concurrent Denial": "new_conc_denial",
-            "Change of Employer Approval": "chg_emp_approval",
-            "Change of Employer Denial": "chg_emp_denial",
-            "Amended Approval": "amd_approval",
-            "Amended Denial": "amd_denial",
-        })
+        df = df.rename(
+            columns={
+                "Employer (Petitioner) Name": "employer",
+                "New Employment Approval": "new_emp_approval",
+                "New Employment Denial": "new_emp_denial",
+                "Continuation Approval": "cont_approval",
+                "Continuation Denial": "cont_denial",
+                "Change with Same Employer Approval": "same_emp_approval",
+                "Change with Same Employer Denial": "same_emp_denial",
+                "New Concurrent Approval": "new_conc_approval",
+                "New Concurrent Denial": "new_conc_denial",
+                "Change of Employer Approval": "chg_emp_approval",
+                "Change of Employer Denial": "chg_emp_denial",
+                "Amended Approval": "amd_approval",
+                "Amended Denial": "amd_denial",
+            }
+        )
 
         approval_cols = [
-            "new_emp_approval", "cont_approval", "same_emp_approval",
-            "new_conc_approval", "chg_emp_approval", "amd_approval",
+            "new_emp_approval",
+            "cont_approval",
+            "same_emp_approval",
+            "new_conc_approval",
+            "chg_emp_approval",
+            "amd_approval",
         ]
 
         denial_cols = [
-            "new_emp_denial", "cont_denial", "same_emp_denial",
-            "new_conc_denial", "chg_emp_denial", "amd_denial",
+            "new_emp_denial",
+            "cont_denial",
+            "same_emp_denial",
+            "new_conc_denial",
+            "chg_emp_denial",
+            "amd_denial",
         ]
 
         # Convert columns to numeric safely
@@ -327,8 +355,8 @@ class CompanyDatabase:
                 path,
                 encoding="utf-16",
                 sep="\t",
-                engine="python",   # python engine required for UTF-16 + tabs
-                on_bad_lines="skip"
+                engine="python",  # python engine required for UTF-16 + tabs
+                on_bad_lines="skip",
             )
             if len(df.columns) > 1:
                 return df
@@ -343,8 +371,8 @@ class CompanyDatabase:
                         path,
                         encoding=encoding,
                         sep=sep,
-                        low_memory=False,   # allowed here
-                        on_bad_lines="skip"
+                        low_memory=False,  # allowed here
+                        on_bad_lines="skip",
                     )
                     if len(df.columns) > 1:
                         return df
@@ -352,7 +380,6 @@ class CompanyDatabase:
                     continue
 
         return None
-
 
     def _filter_sponsorships(self, df: pd.DataFrame) -> pd.DataFrame:
         if VisaConfig.VISA_CLASS_COLUMN in df.columns:
@@ -375,22 +402,51 @@ class CompanyDatabase:
     # ==================================================================
     def get_company_by_name(self, name: str):
         norm = self.normalize_company_name(name)
-        try:
-            self.cursor.execute(
-                "SELECT * FROM companies WHERE normalized_name = %s;", (norm,)
-            )
-            return self.cursor.fetchone()
-        except:
-            return None
+        self.cursor.execute(
+            """
+            SELECT *
+            FROM companies
+            WHERE parent_brand ILIKE %s
+               OR normalized_name = %s
+            LIMIT 1;
+            """,
+            (name, norm),
+        )
+        row = self.cursor.fetchone()
+        return Company.from_dict(dict(row)) if row else None
 
-    def get_all_sponsors(self):
-        self.cursor.execute("""
+    def get_all_sponsors(self) -> List[Company]:
+        self.cursor.execute(
+            """
             SELECT *
             FROM companies
             WHERE sponsors_visas = TRUE
             ORDER BY approved_cases DESC, reliability_score DESC;
-        """)
-        return self.cursor.fetchall()
+            """
+        )
+        return [Company.from_dict(dict(r)) for r in self.cursor.fetchall()]
+    
+    def get_company_by_id(self, company_id: str):
+        try:
+            self.cursor.execute("SELECT * FROM companies WHERE id = %s;", (company_id,))
+            data = dict(self.cursor.fetchone())
+            if data:
+                return Company().from_dict(data)
+        except:
+            return None
+
+    def get_all_sponsors(self):
+        self.cursor.execute(
+            """
+            SELECT *
+            FROM companies
+            WHERE sponsors_visas = TRUE
+            ORDER BY approved_cases DESC, reliability_score DESC;
+        """
+        )
+
+        sponsors = self.cursor.fetchall()
+        return [Company.from_dict(dict(row)) for row in sponsors]
 
     # ==================================================================
     # CONTEXT MANAGER
@@ -400,17 +456,24 @@ class CompanyDatabase:
             self.cursor.close()
             self.conn.close()
 
-    def __enter__(self): return self
+    def __enter__(self):
+        return self
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         if exc_type:
             self.conn.rollback()
         self.close()
 
-if __name__ == "__main__":
 
+
+
+if __name__ == "__main__":
+    with get_db_connection() as conn:
+        c = conn.cursor()
+        c.execute("DELETE FROM companies;")
+        conn.commit()
     csv_path = Path("resources/Employer_info.csv")
     with CompanyDatabase() as db:
-        print(f"Importing from {csv_path}...")
-        imported = db.import_from_csv(str(csv_path))
+        print(db.import_from_csv(str(csv_path)))
 
-        
+    
