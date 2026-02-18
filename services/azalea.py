@@ -64,13 +64,13 @@ class JobStats:
         self.jsearch = 0
         self.remoteok = 0
 
-    def increment_source(self, source: str, count: int):
+    def increment_source(self, source: JobSource, count: int):
         """Increment counter for a specific source"""
-        if source == JobSource.SIMPLIFY.value:
+        if source == JobSource.SIMPLIFY:
             self.simplify += count
-        elif source == JobSource.JSEARCH.value:
+        elif source == JobSource.JSEARCH:
             self.jsearch += count
-        elif source == JobSource.REMOTEOK.value:
+        elif source == JobSource.REMOTEOK:
             self.remoteok += count
 
 
@@ -79,7 +79,7 @@ class Azalea:
     
     def __init__(self):
         self.jobs: List[Dict] = []
-        self.helpers: Dict[str, any] = {}
+        self.helpers: Dict[JobSource, any] = {}
         self.stats = JobStats()
         self._init_helpers()
         self.company_cache: set[Company] = set()
@@ -87,21 +87,21 @@ class Azalea:
     def _init_helpers(self):
         """Initialize all helper classes for job sources"""
         # Simplify is always available
-        self.helpers[JobSource.SIMPLIFY.value] = SimplifyHelper()
+        self.helpers[JobSource.SIMPLIFY] = SimplifyHelper()
         logger.info(f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized")
         
         # JSearch requires API key
         if Config.J_SEARCH_API_KEY:
-            self.helpers[JobSource.JSEARCH.value] = JSearchHelper()
+            self.helpers[JobSource.JSEARCH] = JSearchHelper()
             logger.info(f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized")
         else:
             logger.warning(f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled.")
     
     def fetch_from_source(
         self, 
-        source: str, 
-        position_type: str = PositionType.INTERN.value,
-        date_posted: str = DatePosted.WEEK.value, 
+        source: JobSource, 
+        position_type: PositionType = PositionType.INTERN,
+        date_posted: DatePosted = DatePosted.WEEK, 
         **kwargs
     ) -> List[Dict]:
         """Fetch jobs from a specific source"""
@@ -119,11 +119,11 @@ class Azalea:
             return jobs
             
         except Exception as e:
-            logger.error(f"{source.capitalize()} scraping failed: {e}")
+            logger.error(f"{source.value.capitalize()} scraping failed: {e}")
             self.stats.errors += 1
             return []
 
-    def _log_fetch_start(self, source: str, position_type: str, date_posted: str):
+    def _log_fetch_start(self, source: JobSource, position_type: PositionType, date_posted: DatePosted):
         """Log the start of a fetch operation"""
         logger.info("=" * 60)
         logger.info(LogMessages.fetch_start(source, position_type, date_posted))
@@ -132,13 +132,13 @@ class Azalea:
     def _fetch_from_helper(
         self, 
         helper, 
-        source: str, 
-        position_type: str, 
-        date_posted: str, 
+        source: JobSource, 
+        position_type: PositionType, 
+        date_posted: DatePosted, 
         **kwargs
     ) -> List[Dict]:
         """Fetch jobs from a specific helper"""
-        if source == JobSource.JSEARCH.value:
+        if source == JobSource.JSEARCH:
             queries = kwargs.get('queries')
             return helper.fetch_jobs(
                 queries, 
@@ -150,21 +150,21 @@ class Azalea:
 
     def fetch_all_sources(
         self, 
-        position_type: str = PositionType.INTERN.value, 
+        position_type: PositionType = PositionType.INTERN, 
         jsearch_queries: Optional[List[str]] = None
     ) -> List[Dict]:
         """Fetch jobs from all available sources"""
         all_jobs = []
         
         # Fetch from Simplify (internships only)
-        if position_type in [PositionType.INTERN.value, PositionType.BOTH.value]:
-            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY.value)
+        if position_type in [PositionType.INTERN, PositionType.BOTH]:
+            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY)
             all_jobs.extend(simplify_jobs)
 
         # Fetch from JSearch if available
-        if JobSource.JSEARCH.value in self.helpers:
+        if JobSource.JSEARCH in self.helpers:
             jsearch_jobs = self.fetch_from_source(
-                JobSource.JSEARCH.value, 
+                JobSource.JSEARCH, 
                 position_type=position_type, 
                 queries=jsearch_queries
             )
@@ -219,8 +219,8 @@ class Azalea:
                 )
                 
                 job["sponsorship"] = (
-                    SponsorshipStatus.LIKELY.value if has_sponsorship 
-                    else SponsorshipStatus.NO_RECORD.value
+                    SponsorshipStatus.LIKELY if has_sponsorship 
+                    else SponsorshipStatus.NO_RECORD
                 )
                 
                 if has_sponsorship:
@@ -279,11 +279,11 @@ class Azalea:
     def run(
         self, 
         sources: Optional[List[str]] = None, 
-        position_type: str = PositionType.INTERN.value, 
+        position_type: PositionType = PositionType.INTERN, 
         use_fuzzy: bool = True, 
         jsearch_queries: Optional[List[str]] = None, 
         save_json: bool = True,
-        date_posted: str = DatePosted.WEEK.value
+        date_posted: DatePosted = DatePosted.WEEK
     ) -> Dict:
         """Main orchestration method"""
         
@@ -328,10 +328,10 @@ class Azalea:
 
     def _fetch_jobs(
         self, 
-        sources: Optional[List[str]], 
-        position_type: str, 
+        sources: Optional[List[JobSource]], 
+        position_type: PositionType, 
         jsearch_queries: Optional[List[str]],
-        date_posted: str
+        date_posted: DatePosted
     ) -> List[Dict]:
         """Fetch jobs from specified or all sources"""
         if sources:
@@ -344,21 +344,21 @@ class Azalea:
         else:
             return self.fetch_all_sources(
                 position_type=position_type, 
-                jsearch_queries=jsearch_queries
+                jsearch_queries=jsearch_queries,    
             )
 
     def _fetch_from_specific_sources(
         self, 
-        sources: List[str], 
-        position_type: str, 
+        sources: List[JobSource], 
+        position_type: PositionType, 
         jsearch_queries: Optional[List[str]],
-        date_posted: str
+        date_posted: DatePosted
     ) -> List[Dict]:
         """Fetch jobs from a specific list of sources"""
         all_jobs = []
         
         for source in sources:
-            kwargs = {'queries': jsearch_queries} if source == JobSource.JSEARCH.value else {}
+            kwargs = {'queries': jsearch_queries} if source == JobSource.JSEARCH else {}
             jobs = self.fetch_from_source(
                 source, 
                 position_type=position_type,
@@ -414,10 +414,10 @@ class Azalea:
 
 def main():
     """Main entry point for job scraping"""
-    orchestrator = Azalea_()
+    orchestrator = Azalea()
     
     try:
-        orchestrator.run(position_type=PositionType.INTERN.value, save_json=True)
+        orchestrator.run(position_type=PositionType.INTERN, save_json=True)
         
         message = orchestrator.build_discord_message(mention_user_id="755872891601551511")
         notify_discord(message)
