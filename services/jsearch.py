@@ -8,7 +8,7 @@ import json
 from services.companies import Job
 from services.config import Config
 from services.constants import (
-    PositionType, DatePosted, EmploymentType, JobSource,
+    PositionType, DatePosted,
     JSearchConfig, HTTPStatus, SearchQueries, FilePaths, LogMessages, Defaults
 )
 
@@ -93,9 +93,9 @@ class JSearchHelper:
         }
 
         if position_type == PositionType.INTERN.value:
-            params["employment_types"] = EmploymentType.INTERN.value
+            params["employment_types"] = PositionType.INTERN.value
         elif position_type == PositionType.FULLTIME.value:
-            params["employment_types"] = EmploymentType.FULLTIME.value
+            params["employment_types"] = PositionType.FULLTIME.value
 
         return params
 
@@ -173,13 +173,13 @@ class JSearchHelper:
 
     def _matches_position_type(self, employment_types: List[str], position_type: str) -> bool:
         """Check if employment types match the requested position type"""
-        if position_type == PositionType.BOTH.value:
-            return (EmploymentType.INTERN.value in employment_types or 
-                    EmploymentType.FULLTIME.value in employment_types)
+        if position_type == PositionType.HYBRID.value:
+            return (PositionType.INTERN.value in employment_types or 
+                    PositionType.FULLTIME.value in employment_types)
         elif position_type == PositionType.INTERN.value:
-            return EmploymentType.INTERN.value in employment_types
+            return PositionType.INTERN.value in employment_types
         elif position_type == PositionType.FULLTIME.value:
-            return EmploymentType.FULLTIME.value in employment_types
+            return PositionType.FULLTIME.value in employment_types
         return False
 
     def _map_job(self, job: Dict) -> Dict:
@@ -194,8 +194,8 @@ class JSearchHelper:
 
     def _determine_position_type(self, employment_types: List[str]) -> str:
         """Determine position type from employment types"""
-        has_intern = EmploymentType.INTERN.value in employment_types
-        has_fulltime = EmploymentType.FULLTIME.value in employment_types
+        has_intern = PositionType.INTERN.value in employment_types
+        has_fulltime = PositionType.FULLTIME.value in employment_types
         
         if has_intern and has_fulltime:
             return PositionType.HYBRID.value
@@ -306,13 +306,22 @@ class JSearchHelper:
             return [SearchQueries.INTERN_SUFFIX]
         elif position_type == PositionType.FULLTIME.value:
             return [SearchQueries.FULLTIME_SUFFIX]
+        elif position_type == PositionType.PARTTIME.value:
+            return [SearchQueries.PARTTIME_SUFFIX]
+        elif position_type == PositionType.REMOTE.value:
+            return [SearchQueries.REMOTE_SUFFIX]
         else:
             return [SearchQueries.INTERN_SUFFIX, SearchQueries.FULLTIME_SUFFIX]
 
 def main():
     jsearch_helper = JSearchHelper()
     jobs = jsearch_helper.fetch_jobs(
-        position_type=PositionType.BOTH.value,
+        position_type=PositionType.INTERN.value,
         date_posted=DatePosted.WEEK.value
     )
+    with open('jsearch_jobs.json', 'w', encoding='utf-8') as f:
+        json.dump(jobs, f, ensure_ascii=False, indent=4)
     logger.info(f"Total jobs fetched: {len(jobs)}")
+
+if __name__ == "__main__":
+    main()

@@ -8,14 +8,13 @@ from dataclasses import dataclass, field
 
 from services.companies import Company, Job
 from services.company_db import CompanyDatabase
-from services.sponsor import SponsorshipDB
 from services.db_manager import JobDatabase
 from services.config import Config
 from services.jsearch import JSearchHelper
 from services.simplify import SimplifyHelper
 from services.notify import notify_discord
 from services.constants import (
-    PositionType, DatePosted, JobSource, SponsorshipStatus,
+    PositionType, DatePosted, JobSource,
     StatsKeys, FilePaths, LogMessages, Defaults
 )
 
@@ -97,84 +96,13 @@ class Azalea:
         else:
             logger.warning(f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled.")
     
-    def fetch_from_source(
-        self, 
-        source: JobSource, 
-        position_type: PositionType = PositionType.INTERN,
-        date_posted: DatePosted = DatePosted.WEEK, 
-        **kwargs
-    ) -> List[Dict]:
-        """Fetch jobs from a specific source"""
-        
-        self._log_fetch_start(source, position_type, date_posted)
-        
-        helper = self.helpers.get(source)
-        if not helper:
-            logger.warning(f"Helper for '{source}' not available")
-            return []
-        
-        try:
-            jobs = self._fetch_from_helper(helper, source, position_type, date_posted, **kwargs)
-            self.stats.increment_source(source, len(jobs))
-            return jobs
-            
-        except Exception as e:
-            logger.error(f"{source.value.capitalize()} scraping failed: {e}")
-            self.stats.errors += 1
-            return []
-
+   
     def _log_fetch_start(self, source: JobSource, position_type: PositionType, date_posted: DatePosted):
         """Log the start of a fetch operation"""
         logger.info("=" * 60)
         logger.info(LogMessages.fetch_start(source, position_type, date_posted))
         logger.info("=" * 60)
-
-    def _fetch_from_helper(
-        self, 
-        helper, 
-        source: JobSource, 
-        position_type: PositionType, 
-        date_posted: DatePosted, 
-        **kwargs
-    ) -> List[Dict]:
-        """Fetch jobs from a specific helper"""
-        if source == JobSource.JSEARCH:
-            queries = kwargs.get('queries')
-            return helper.fetch_jobs(
-                queries, 
-                position_type=position_type, 
-                date_posted=date_posted
-            )
-        else:
-            return helper.fetch_jobs()
-
-    def fetch_all_sources(
-        self, 
-        position_type: PositionType = PositionType.INTERN, 
-        jsearch_queries: Optional[List[str]] = None
-    ) -> List[Dict]:
-        """Fetch jobs from all available sources"""
-        all_jobs = []
-        
-        # Fetch from Simplify (internships only)
-        if position_type in [PositionType.INTERN, PositionType.BOTH]:
-            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY)
-            all_jobs.extend(simplify_jobs)
-
-        # Fetch from JSearch if available
-        if JobSource.JSEARCH in self.helpers:
-            jsearch_jobs = self.fetch_from_source(
-                JobSource.JSEARCH, 
-                position_type=position_type, 
-                queries=jsearch_queries
-            )
-            all_jobs.extend(jsearch_jobs)
-        
-        self.stats.total_fetched = len(all_jobs)
-        logger.info(f"Total positions fetched from all sources: {self.stats.total_fetched}")
-        
-        return all_jobs
-    
+   
     def deduplicate_jobs(self, jobs: List[Job]) -> List[Job]:
         """Remove duplicate jobs based on company + title + location"""
         seen = set()
@@ -199,55 +127,6 @@ class Azalea:
         title = job.get("title", "").strip().lower()
         location = job.get("location", "").strip().lower()
         return (company, title, location)
-    
-    def tag_sponsorship(self, jobs: List[Dict], use_fuzzy: bool = True) -> int:
-        """Tag jobs with sponsorship information"""
-        try:
-            sponsorship_db = SponsorshipDB(csv_paths=[Config.SPONSORSHIP_CSV])
-            threshold = Config.FUZZY_THRESHOLD
-            
-            logger.info(f"Tagging {len(jobs)} jobs with sponsorship info...")
-            tagged_count = 0
-
-            for job in jobs:
-                company = job.get("company", "")
-                has_sponsorship = self._check_sponsorship(
-                    sponsorship_db, 
-                    company, 
-                    use_fuzzy, 
-                    threshold
-                )
-                
-                job["sponsorship"] = (
-                    SponsorshipStatus.LIKELY if has_sponsorship 
-                    else SponsorshipStatus.NO_RECORD
-                )
-                
-                if has_sponsorship:
-                    tagged_count += 1
-            
-            logger.info(LogMessages.sponsorship_tagged(tagged_count, len(jobs)))
-            self.stats.with_sponsorship = tagged_count
-            return tagged_count
-        
-        except Exception as e:
-            logger.warning(f"Could not load sponsorship database: {e}")
-            self.stats.errors += 1
-            self.stats.with_sponsorship = 0
-            return 0
-
-    def _check_sponsorship(
-        self, 
-        db: SponsorshipDB, 
-        company: str, 
-        use_fuzzy: bool, 
-        threshold: int
-    ) -> bool:
-        """Check if company likely sponsors visas"""
-        if use_fuzzy:
-            return db.fuzzy_match(company, threshold)
-        else:
-            return db.has_sponsorship(company)
     
     def save_to_json(self, jobs: List[Dict], filepath: str = FilePaths.SCRAPED_JOBS_JSON):
         """Save jobs to JSON file for backup/debugging"""
@@ -275,16 +154,67 @@ class Azalea:
             
             self.stats.inserted = inserted
             return inserted
-    
-    def run(
-        self, 
-        sources: Optional[List[str]] = None, 
-        position_type: PositionType = PositionType.INTERN, 
-        use_fuzzy: bool = True, 
-        jsearch_queries: Optional[List[str]] = None, 
-        save_json: bool = True,
-        date_posted: DatePosted = DatePosted.WEEK
-    ) -> Dict:
+        
+
+        # ============================================================================ #
+        #                                   FECTH FN                                   #
+        # ============================================================================ #
+        def fetch_from_source( self,  source: JobSource,  position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK,  **kwargs) -> List[Dict]:
+        """Fetch jobs from a specific source"""
+        
+        self._log_fetch_start(source, position_type, date_posted)
+        helper = self.helpers.get(source)
+        if not helper:
+            logger.warning(f"Helper for '{source}' not available")
+            return []
+        try:
+            jobs = self._fetch_from_helper(helper, source, position_type, date_posted, **kwargs)
+            self.stats.increment_source(source, len(jobs))
+            return jobs
+            
+        except Exception as e:
+            logger.error(f"{source.value.capitalize()} scraping failed: {e}")
+            self.stats.errors += 1
+            return []
+        
+    def _fetch_from_helper(self, source: JobSource, position_type: PositionType, date_posted: DatePosted, **kwargs) -> List[Dict]:
+        """Fetch jobs from a specific helper"""
+        helper = self.helpers.get(source)
+        if not helper:
+            logger.warning(f"Helper for '{source}' not available")
+            return []   
+        if source == JobSource.JSEARCH:
+            queries = kwargs.get('queries')
+            return helper.fetch_jobs( queries,  position_type=position_type,  date_posted=date_posted)
+        else:
+            return helper.fetch_jobs()
+
+    def fetch_all_sources( self,  position_type: PositionType = PositionType.INTERN,  jsearch_queries: Optional[List[str]] = None) -> List[Dict]:
+        """Fetch jobs from all available sources"""
+        all_jobs = []
+        
+        # Fetch from Simplify (internships only)
+        if position_type in [PositionType.INTERN, PositionType.HYBRID]:
+            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY)
+            all_jobs.extend(simplify_jobs)
+
+        # Fetch from JSearch if available
+        if JobSource.JSEARCH in self.helpers:
+            jsearch_jobs = self.fetch_from_source(
+                JobSource.JSEARCH, 
+                position_type=position_type, 
+                queries=jsearch_queries
+            )
+            all_jobs.extend(jsearch_jobs)
+        
+        self.stats.total_fetched = len(all_jobs)
+        logger.info(f"Total positions fetched from all sources: {self.stats.total_fetched}")
+        
+        return all_jobs
+
+
+ 
+    def run(self,  position_type: PositionType = PositionType.INTERN,  save_json: bool = True, jsearch_queries: Optional[List[str]] = None) -> Dict:
         """Main orchestration method"""
         
         try:
@@ -292,7 +222,7 @@ class Azalea:
             self.stats.reset_source_counts()
             self.stats.position_type = position_type
             
-            all_jobs = self._fetch_jobs(sources, position_type, jsearch_queries, date_posted)
+            all_jobs = self.fetch_all_sources(position_type=position_type, jsearch_queries=jsearch_queries)
             #probably not the best place for this but whatever
             self.company_cache.add(CompanyDatabase.get_all_sponsors()) # Preload company cache
             if not all_jobs:
@@ -303,17 +233,13 @@ class Azalea:
             self._log_section("DEDUPLICATING JOBS")
             unique_jobs = self.deduplicate_jobs(all_jobs)
             self.jobs = unique_jobs
+          
             
-            # Step 3: Tag with sponsorship info
-            #TODO: SInce the company db now has sponsorship info, consider integrating that in the helpers directly
-            self._log_section("TAGGING SPONSORSHIP")
-            self.tag_sponsorship(unique_jobs, use_fuzzy)
-            
-            # Step 4: Save to JSON (optional)
+            # Step 3: Save to JSON (optional)
             if save_json:
                 self.save_to_json(unique_jobs)
             
-            # Step 5: Save to database
+            # Step 5``: Save to database
             self.save_to_database(unique_jobs)
             
             # Print summary
@@ -326,48 +252,6 @@ class Azalea:
             logger.error(f"Error in run process: {e}", exc_info=True)
             raise
 
-    def _fetch_jobs(
-        self, 
-        sources: Optional[List[JobSource]], 
-        position_type: PositionType, 
-        jsearch_queries: Optional[List[str]],
-        date_posted: DatePosted
-    ) -> List[Dict]:
-        """Fetch jobs from specified or all sources"""
-        if sources:
-            return self._fetch_from_specific_sources(
-                sources, 
-                position_type, 
-                jsearch_queries,
-                date_posted
-            )
-        else:
-            return self.fetch_all_sources(
-                position_type=position_type, 
-                jsearch_queries=jsearch_queries,    
-            )
-
-    def _fetch_from_specific_sources(
-        self, 
-        sources: List[JobSource], 
-        position_type: PositionType, 
-        jsearch_queries: Optional[List[str]],
-        date_posted: DatePosted
-    ) -> List[Dict]:
-        """Fetch jobs from a specific list of sources"""
-        all_jobs = []
-        
-        for source in sources:
-            kwargs = {'queries': jsearch_queries} if source == JobSource.JSEARCH else {}
-            jobs = self.fetch_from_source(
-                source, 
-                position_type=position_type,
-                date_posted=date_posted,
-                **kwargs
-            )
-            all_jobs.extend(jobs)
-        
-        return all_jobs
 
     def _log_section(self, title: str):
         """Log a section divider"""

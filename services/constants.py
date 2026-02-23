@@ -8,23 +8,21 @@ from typing import Final
 
 class PositionType(Enum):
     """Job position types"""
-
     INTERN = "intern"
     FULLTIME = "fulltime"
-    BOTH = "both"
+    PARTIME = "part-time"
+    REMOTE = "remote"
     HYBRID = "hybrid"
     OTHER = "other"
 
 
 class DatePosted(Enum):
     """Date filter options for job searches"""
-
     ALL = "all"
     TODAY = "today"
     THREE_DAYS = "3days"
     WEEK = "week"
     MONTH = "month"
-
 
 class JobSource(Enum):
     """Available job data sources"""
@@ -32,13 +30,6 @@ class JobSource(Enum):
     SIMPLIFY = "simplify"
     JSEARCH = "jsearch"
     REMOTEOK = "remoteok"
-
-
-class EmploymentType(Enum):
-    """Employment type constants from APIs"""
-
-    INTERN = "INTERN"
-    FULLTIME = "FULLTIME"
 
 
 class SponsorshipStatus(Enum):
@@ -83,22 +74,6 @@ class DBFields:
         ]
 
 
-# CSV parsing constants
-class CSVConfig:
-    """CSV parsing configuration"""
-
-    ENCODINGS: Final = ["utf-16", "utf-8", "latin-1", "cp1252"]
-    SEPARATORS: Final = ["\t", ",", ";"]
-    EMPLOYER_COLUMNS: Final = [
-        "EmployerName",
-        "Employer",
-        "Employer_Name",
-        "CompanyName",
-        "Employer (Petitioner) Name",
-    ]
-    MIN_CASES_DEFAULT: Final = 3
-
-
 # JSearch API constants
 class JSearchConfig:
     """JSearch API configuration"""
@@ -113,7 +88,6 @@ class JSearchConfig:
 
 class HTTPStatus:
     """HTTP status codes"""
-
     OK: Final = 200
     UNAUTHORIZED: Final = 401
     FORBIDDEN: Final = 403
@@ -123,9 +97,10 @@ class HTTPStatus:
 # Search query templates
 class SearchQueries:
     """Search query templates"""
-
     INTERN_SUFFIX: Final = "intern"
     FULLTIME_SUFFIX: Final = "entry level"
+    PARTTIME_SUFFIX: Final = "part-time"
+    REMOTE_SUFFIX: Final = "remote"
     DEFAULT_QUERY: Final = "developer"
 
 

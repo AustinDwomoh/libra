@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
-    SPONSORSHIP_CSV = "resources/Employer_info.csv"
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 30
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")

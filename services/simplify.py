@@ -234,3 +234,13 @@ def clean_company_name(name: str) -> str:
     """Standalone utility to clean company names"""
     no_emoji = emoji.replace_emoji(name, replace='')
     return no_emoji.strip().lower()
+
+
+if __name__ == "__main__":
+    helper = SimplifyHelper()
+    jobs = helper.fetch_jobs()
+    with open("simplify.json", "w") as f:
+        import json
+        json.dump(jobs, f, indent=2)
+    stats = helper.get_stats()
+    logger.info(f"Simplify: Stats - {stats}")
