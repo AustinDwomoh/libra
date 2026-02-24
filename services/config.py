@@ -6,8 +6,8 @@ class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 30
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    GOOGLE_CX = os.getenv("GOOGLE_CX")
+    #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    #GOOGLE_CX = os.getenv("GOOGLE_CX")
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     #REMOTEOK_API_URL = "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")

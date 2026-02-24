@@ -16,13 +16,6 @@ class PositionType(Enum):
     OTHER = "other"
 
 
-class DatePosted(Enum):
-    """Date filter options for job searches"""
-    ALL = "all"
-    TODAY = "today"
-    THREE_DAYS = "3days"
-    WEEK = "week"
-    MONTH = "month"
 
 class JobSource(Enum):
     """Available job data sources"""
@@ -30,49 +23,6 @@ class JobSource(Enum):
     SIMPLIFY = "simplify"
     JSEARCH = "jsearch"
     REMOTEOK = "remoteok"
-
-
-class SponsorshipStatus(Enum):
-    """Sponsorship status values"""
-
-    LIKELY = "Likely sponsorship"
-    NO_RECORD = "No record found"
-
-
-# Database field names
-class DBFields:
-    """Database column names"""
-
-    ID: Final = "id"
-    COMPANY: Final = "company"
-    TITLE: Final = "title"
-    LOCATION: Final = "location"
-    LINK: Final = "link"
-    SPONSORSHIP: Final = "sponsorship"
-    SOURCE: Final = "source"
-    REMOTE: Final = "remote"
-    DATE_POSTED: Final = "date_posted"
-    DESCRIPTION: Final = "description"
-    TAGS: Final = "tags"
-    CREATED_AT: Final = "created_at"
-    UPDATED_AT: Final = "updated_at"
-
-    @classmethod
-    def updatable_fields(cls) -> list[str]:
-        """Returns list of fields that can be updated"""
-        return [
-            cls.COMPANY,
-            cls.TITLE,
-            cls.LOCATION,
-            cls.LINK,
-            cls.SPONSORSHIP,
-            cls.SOURCE,
-            cls.REMOTE,
-            cls.DATE_POSTED,
-            cls.DESCRIPTION,
-            cls.TAGS,
-        ]
-
 
 # JSearch API constants
 class JSearchConfig:
@@ -187,35 +137,7 @@ class Defaults:
     DEFAULT_SPONSORSHIP: Final = False
 
 
-# Company validation
-class CompanyValidation:
-    """Company validation constants"""
-
-    MIN_NAME_LENGTH: Final = 1
-    MAX_URL_TIMEOUT: Final = 5
-    NORMALIZATION_TERMS: Final = [
-        "inc",
-        "inc.",
-        "corp",
-        "corp.",
-        "corporation",
-        "llc",
-        "l.l.c.",
-        "ltd",
-        "ltd.",
-        "limited",
-        "co",
-        "co.",
-        "company",
-        "plc",
-        "gmbh",
-        "s.a.",
-        "sa",
-        "llp",
-    ]
-
-
-# Simplify scraping constants
+# Simplify scraping constant
 class SimplifyConfig:
     """Simplify scraper configuration"""
 
@@ -224,13 +146,12 @@ class SimplifyConfig:
     EXCLUDED_LINK_PREFIXES: Final = ["#"]
     EXCLUDED_LINK_DOMAINS: Final = ["github.com"]
 
+class DatePosted(Enum):
+    """Date filter options for job searches"""
+    ALL = "all"
+    TODAY = "today"
+    THREE_DAYS = "3days"
+    WEEK = "week"
+    MONTH = "month"
 
-# Visa/Sponsorship constants
-class VisaConfig:
-    """Visa and sponsorship related constants"""
 
-    VISA_CLASS_COLUMN: Final = "VisaClass"
-    CASE_STATUS_COLUMN: Final = "CaseStatus"
-    H1B_PATTERN: Final = "H-1B"
-    APPROVED_PATTERN: Final = "Approved|Certified"
-    MIN_SPONSORSHIP_CASES: Final = 3

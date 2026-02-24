@@ -2,88 +2,37 @@
 jsearch.py - Refactored with constants
 """
 from typing import List, Dict
-import requests
-import time
-import json
+import requests,json,time
 from services.companies import Job
 from services.config import Config
-from services.constants import (
-    PositionType, DatePosted,
-    JSearchConfig, HTTPStatus, SearchQueries, FilePaths, LogMessages, Defaults
-)
+from services.constants import (PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults)
+from db import JobDatabase
 
-logger = Config.logger
-
-
-class JSearchHelper:
+class JSearch:
     """Helper class for JSearch API integration via OpenWebNinja"""
 
     def __init__(self):
         self.api_key = Config.J_SEARCH_API_KEY
         if not self.api_key:
-            logger.warning("JSearch API key not found in environment variables")
+            raise ValueError("JSearch API key not configured. Set the J_SEARCH_API_KEY environment variable.")
 
         self.headers = {"X-API-Key": self.api_key}
         self.seen_jobs = set()
         self.request_count = 0
 
-    def fetch_positions(
-        self,
-        query: str = "",
-        position_type: str = PositionType.INTERN.value,
-        page: int = 1,
-        date_posted: str = DatePosted.WEEK.value,
-        retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT,
-    ) -> List[Dict]:
-        """Fetch positions from OpenWebNinja JSearch API"""
+    # ============================================================================ #
+    #                              QUERY / PARAMS                                  #
+    # ============================================================================ #
 
-        if not self.api_key:
-            logger.error("JSearch: Cannot make request - API key not configured")
-            return []
-
-        search_query = self._build_search_query(query, position_type)
-        logger.info(
-            f"JSearch: Fetching {position_type} results for '{search_query}' (posted: {date_posted})"
-        )
-
-        params = self._build_request_params(search_query, position_type, page, date_posted)
-
-        for attempt in range(retry_count):
-            try:
-                response = self._make_request(params)
-                
-                if not self._handle_response_status(response, attempt, retry_count):
-                    continue
-
-                jobs = self._process_response(response, position_type, search_query)
-                return jobs
-
-            except requests.RequestException as e:
-                logger.error(f"JSearch API error: {e}")
-                if attempt < retry_count - 1:
-                    time.sleep(JSearchConfig.RETRY_DELAY)
-                    continue
-                return []
-
-        logger.error(f"JSearch: All {retry_count} retry attempts failed")
-        return []
-
-    def _build_search_query(self, query: str, position_type: str) -> str:
+    def _build_search_query(self, query: str, position_type: PositionType) -> str:
         """Build search query based on position type"""
-        if position_type == PositionType.INTERN.value:
+        if position_type == PositionType.INTERN:
             return f"{query} {SearchQueries.INTERN_SUFFIX}" if query else SearchQueries.INTERN_SUFFIX
-        elif position_type == PositionType.FULLTIME.value:
+        elif position_type == PositionType.FULLTIME:
             return f"{query} {SearchQueries.FULLTIME_SUFFIX}" if query else SearchQueries.FULLTIME_SUFFIX
-        else:
-            return query if query else SearchQueries.DEFAULT_QUERY
+        return query if query else SearchQueries.DEFAULT_QUERY
 
-    def _build_request_params(
-        self, 
-        search_query: str, 
-        position_type: str, 
-        page: int, 
-        date_posted: str
-    ) -> Dict:
+    def _build_request_params( self, search_query: str, position_type: PositionType, page: int, date_posted: DatePosted,) -> Dict:
         """Build request parameters"""
         params = {
             "query": search_query,
@@ -92,12 +41,15 @@ class JSearchHelper:
             "date_posted": date_posted,
         }
 
-        if position_type == PositionType.INTERN.value:
-            params["employment_types"] = PositionType.INTERN.value
-        elif position_type == PositionType.FULLTIME.value:
-            params["employment_types"] = PositionType.FULLTIME.value
-
+        # Only add employment_types for non-hybrid requests; the query suffix already
+        # handles the filter so we mirror it here only when unambiguous.
+        if position_type in (PositionType.INTERN, PositionType.FULLTIME):
+            params["employment_types"] = position_type.value
         return params
+
+    # ============================================================================ #
+    #                            HTTP / RESPONSE                                   #
+    # ============================================================================ #
 
     def _make_request(self, params: Dict) -> requests.Response:
         """Make HTTP request to JSearch API"""
@@ -111,23 +63,23 @@ class JSearchHelper:
         return response
 
     def _handle_response_status(
-        self, 
-        response: requests.Response, 
-        attempt: int, 
-        retry_count: int
+        self,
+        response: requests.Response,
+        attempt: int,
+        retry_count: int,
     ) -> bool:
-        """Handle HTTP response status codes. Returns True if should continue processing."""
+        """Handle HTTP response status codes. Returns True if processing should continue."""
         if response.status_code == HTTPStatus.FORBIDDEN:
-            logger.error("JSearch: 403 Forbidden - Check your API key")
+            Config.logger.error("JSearch: 403 Forbidden - Check your API key")
             return False
 
-        elif response.status_code == HTTPStatus.UNAUTHORIZED:
-            logger.error("JSearch: 401 Unauthorized - Invalid API key")
+        if response.status_code == HTTPStatus.UNAUTHORIZED:
+            Config.logger.error("JSearch: 401 Unauthorized - Invalid API key")
             return False
 
-        elif response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
+        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
             wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
-            logger.warning(
+            Config.logger.warning(
                 f"JSearch: Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})"
             )
             time.sleep(wait_time)
@@ -137,191 +89,189 @@ class JSearchHelper:
         return True
 
     def _process_response(
-        self, 
-        response: requests.Response, 
-        position_type: str, 
-        search_query: str
+        self,
+        response: requests.Response,
+        position_type: PositionType,
+        search_query: str,
     ) -> List[Dict]:
         """Process API response and filter jobs"""
         data = response.json()
         jobs = data.get("data", [])
+
+        Config.logger.debug(f"Jobs found: {len(jobs)}")
         
-        logger.debug(f"Jobs found: {len(jobs)}")
         self._save_raw_jobs(jobs)
 
-        filtered_jobs = self._filter_by_employment_type(jobs, position_type)
-        logger.info(LogMessages.jobs_found(len(filtered_jobs), search_query))
-        
-        return [self._map_job(job) for job in filtered_jobs]
+        Config.logger.info(LogMessages.jobs_found(len(jobs), search_query))
 
-    def _save_raw_jobs(self, jobs: List[Dict]):
+        return [self._map_job(job) for job in jobs]
+
+    def _save_raw_jobs(self, jobs: List[Dict]) -> None:
         """Save raw job data for debugging"""
         with open(FilePaths.JSEARCH_RAW_JOBS, "w", encoding="utf-8") as f:
             json.dump(jobs, f, ensure_ascii=False, indent=4)
 
-    def _filter_by_employment_type(self, jobs: List[Dict], position_type: str) -> List[Dict]:
-        """Filter jobs by employment type"""
-        filtered_jobs = []
-        
-        for job in jobs:
-            employment_types = job.get("job_employment_types", [])
-            
-            if self._matches_position_type(employment_types, position_type):
-                filtered_jobs.append(job)
-        
-        return filtered_jobs
+    # ============================================================================ #
+    #                          POSITION TYPE HELPERS                               #
+    # ============================================================================ #
 
-    def _matches_position_type(self, employment_types: List[str], position_type: str) -> bool:
-        """Check if employment types match the requested position type"""
-        if position_type == PositionType.HYBRID.value:
-            return (PositionType.INTERN.value in employment_types or 
-                    PositionType.FULLTIME.value in employment_types)
-        elif position_type == PositionType.INTERN.value:
-            return PositionType.INTERN.value in employment_types
-        elif position_type == PositionType.FULLTIME.value:
-            return PositionType.FULLTIME.value in employment_types
-        return False
-
-    def _map_job(self, job: Dict) -> Dict:
-        """Map JSearch response to standard job format"""
-        employment_types = job.get("job_employment_types", [])
-        
-        job["position_type"] = self._determine_position_type(employment_types)
-        job["location"] = self._get_location(job)
-        job["salary_range"] = self._extract_salary(job)
-        
-        return Job._to_job_object(job)
-
-    def _determine_position_type(self, employment_types: List[str]) -> str:
-        """Determine position type from employment types"""
+    def _get_position_type(self, employment_types: List[str]) -> PositionType:
+        """
+        Derive a single PositionType value from a job's employment_types list.
+        This is the single source of truth for position-type logic, used by
+        both filtering and mapping.
+        """
         has_intern = PositionType.INTERN.value in employment_types
         has_fulltime = PositionType.FULLTIME.value in employment_types
-        
+
         if has_intern and has_fulltime:
-            return PositionType.HYBRID.value
-        elif has_intern:
-            return PositionType.INTERN.value
-        elif has_fulltime:
-            return PositionType.FULLTIME.value
-        else:
-            return PositionType.OTHER.value
+            return PositionType.HYBRID
+        if has_intern:
+            return PositionType.INTERN
+        if has_fulltime:
+            return PositionType.FULLTIME
+        return PositionType.OTHER
+
+    def _matches_position_type(self, employment_types: List[str], position_type: PositionType) -> bool:
+        """Check whether a job's employment types satisfy the requested position type filter."""
+        actual = self._get_position_type(employment_types)
+
+        if position_type == PositionType.HYBRID:
+            # Hybrid filter accepts intern, fulltime, or hybrid jobs
+            return actual in (
+                PositionType.INTERN,
+                PositionType.FULLTIME,
+                PositionType.HYBRID,
+            )
+        return actual == position_type
+
+    # ============================================================================ #
+    #                           FILTERING / MAPPING                                #
+    # ============================================================================ #
+
+
+
+    def _map_job(self, job: Dict) -> Job:
+        """Map JSearch response to standard job format"""
+        compnay_dict = {
+            "name": job.get("employer_name"),
+            "company_url": job.get("employer_website"),
+            "description": job.get("employer_description"),
+        }
+        company = JobDatabase.upsert("company", compnay_dict)
+        employment_types = job.get("job_employment_types", [])
+        job["position_type"] = self._get_position_type(employment_types)   # reuses unified helper
+        job["location"] = self._get_location(job)
+        job["salary_range"] = self._extract_salary(job)
+
+        return Job.from_dict(job, company=company)
 
     def _extract_salary(self, job: Dict):
         """Extract salary range from job data"""
         min_sal = job.get("job_min_salary")
         max_sal = job.get("job_max_salary")
-
-        if min_sal and max_sal:
-            return (min_sal, max_sal)
-        return None
+        return (min_sal, max_sal) if min_sal and max_sal else None
 
     def _get_location(self, job: Dict) -> str:
         """Extract location from JSearch job"""
-        city = job.get("job_city", "")
-        state = job.get("job_state", "")
-        country = job.get("job_country", "")
-
-        parts = [p for p in [city, state, country] if p]
+        parts = [p for p in [job.get("job_city", ""), job.get("job_state", ""), job.get("job_country", "")] if p]
         return ", ".join(parts) if parts else Defaults.LOCATION_NOT_SPECIFIED
 
     def _deduplicate_jobs(self, jobs: List[Dict]) -> List[Dict]:
         """Remove duplicate jobs based on job_id"""
         unique_jobs = []
-
         for job in jobs:
             job_id = job.get("job_id")
             if job_id and job_id not in self.seen_jobs:
                 self.seen_jobs.add(job_id)
                 unique_jobs.append(job)
-
         return unique_jobs
 
-    def fetch_jobs(
-        self,
-        categories: List[str] = None,
-        custom_queries: List[str] = None,
-        position_type: str = PositionType.INTERN.value,
-        date_posted: str = DatePosted.WEEK.value,
-        rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,
-    ) -> List[Dict]:
-        """Main method: Fetch jobs with rate limiting"""
+    # ============================================================================ #
+    #                                 FETCH FNS                                    #
+    # ============================================================================ #
 
-        if not self.api_key:
-            logger.error("JSearch: Cannot fetch jobs - API key not configured")
-            return []
+    def fetch_jobs( self, queries: List[str] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
+        """
+        Fetch jobs across multiple search queries with rate limiting.
 
-        queries = self._determine_queries(categories, custom_queries)
+        To find all positions for a specific major, pass a list of queries such as
+        ["computer science", "data science"] and set include_general=False in
+        fetch_jobs_for_student.
+
+        Args:
+            queries:           List of search terms. Defaults to JSearchConfig.DEFAULT_CATEGORIES.
+            position_type:     One of PositionType values (intern / fulltime / hybrid).
+            date_posted:       DatePosted enum controlling recency filter.
+            rate_limit_delay:  Seconds to wait between successive query requests.
+
+        Returns:
+            Deduplicated list of standardised job dicts.
+        """
+        queries = queries or JSearchConfig.DEFAULT_CATEGORIES
         all_jobs = []
         self.seen_jobs.clear()
 
         for i, query in enumerate(queries):
-            logger.info(f"JSearch: Query {i+1}/{len(queries)}")
-
-            jobs = self.fetch_positions(
-                query, 
-                position_type=position_type, 
-                date_posted=date_posted
-            )
+            Config.logger.info(f"JSearch: Query {i + 1}/{len(queries)}")
+            jobs = self.fetch_positions(query, position_type=position_type, date_posted=date_posted)
             all_jobs.extend(jobs)
 
             if i < len(queries) - 1:
-                logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
+                Config.logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
                 time.sleep(rate_limit_delay)
 
         unique_jobs = self._deduplicate_jobs(all_jobs)
-        logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
-        
+        Config.logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
         return unique_jobs
 
-    def _determine_queries(
-        self, 
-        categories: List[str] = None, 
-        custom_queries: List[str] = None
-    ) -> List[str]:
-        """Determine which queries to use"""
-        if custom_queries:
-            return custom_queries
-        elif categories:
-            return categories
-        else:
-            return JSearchConfig.DEFAULT_CATEGORIES
+    def fetch_positions( self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT,) -> List[Dict]:
+        """
+        Fetch a single page of positions from the JSearch API.
 
-    def fetch_jobs_for_student(
-        self,
-        student_major: str,
-        position_type: str = PositionType.INTERN.value,
-        include_general: bool = True,
-    ) -> List[Dict]:
-        """Fetch jobs tailored to a specific student's major"""
-        queries = [student_major]
+        Args:
+            query:         Raw search term (suffixes are appended automatically).
+            position_type: One of PositionType values.
+            page:          Page number to request.
+            date_posted:   DatePosted enum controlling recency filter.
+            retry_count:   Number of retry attempts on transient failures.
 
-        if include_general:
-            queries.extend(self._get_general_queries(position_type))
+        Returns:
+            List of standardised job dicts, or [] on failure.
+        """
+        search_query = self._build_search_query(query, position_type)
+        Config.logger.info(
+            f"JSearch: Fetching {position_type} results for '{search_query}' (posted: {date_posted.value})"
+        )
 
-        return self.fetch_jobs(custom_queries=queries, position_type=position_type)
+        params = self._build_request_params(search_query, position_type, page, date_posted.value)
 
-    def _get_general_queries(self, position_type: str) -> List[str]:
-        """Get general queries based on position type"""
-        if position_type == PositionType.INTERN.value:
-            return [SearchQueries.INTERN_SUFFIX]
-        elif position_type == PositionType.FULLTIME.value:
-            return [SearchQueries.FULLTIME_SUFFIX]
-        elif position_type == PositionType.PARTTIME.value:
-            return [SearchQueries.PARTTIME_SUFFIX]
-        elif position_type == PositionType.REMOTE.value:
-            return [SearchQueries.REMOTE_SUFFIX]
-        else:
-            return [SearchQueries.INTERN_SUFFIX, SearchQueries.FULLTIME_SUFFIX]
+        for attempt in range(retry_count):
+            try:
+                response = self._make_request(params)
+
+                if not self._handle_response_status(response, attempt, retry_count):
+                    continue
+
+                return self._process_response(response, position_type, search_query)
+
+            except requests.RequestException as e:
+                Config.logger.error(f"JSearch API error: {e}")
+                if attempt < retry_count - 1:
+                    time.sleep(JSearchConfig.RETRY_DELAY)
+                    continue
+                return []
+
+        Config.logger.error(f"JSearch: All {retry_count} retry attempts failed")
+        return []
+
 
 def main():
-    jsearch_helper = JSearchHelper()
-    jobs = jsearch_helper.fetch_jobs(
-        position_type=PositionType.INTERN.value,
-        date_posted=DatePosted.WEEK.value
-    )
+    jsearch_helper = JSearch()
+    jobs = jsearch_helper.fetch_jobs( position_type=PositionType.INTERN, date_posted=DatePosted.WEEK )
     with open('jsearch_jobs.json', 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)
-    logger.info(f"Total jobs fetched: {len(jobs)}")
+    Config.logger.info(f"Total jobs fetched: {len(jobs)}")
 
 if __name__ == "__main__":
     main()

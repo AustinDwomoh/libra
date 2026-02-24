@@ -2,7 +2,7 @@ from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from services.db_manager import JobDatabase
+from services.db import JobDatabase
 
 app = FastAPI(
     title="Libra - Job Scraping API",

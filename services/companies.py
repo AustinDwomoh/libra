@@ -1,310 +1,140 @@
-"""
-companies.py - Refactored with constants and improved validation
-
-Key improvements:
-- Replaced ALL magic strings with named constants
-- Fixed validation bugs (== None checks)
-- Added automatic company name normalization
-- Made optional fields actually optional with defaults
-- Added to_dict/from_dict for database integration
-- Fixed pay_range type (was int, now tuple)
-- Better error messages and validation
-"""
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List
-import requests
-
-from services.constants import (
-    Defaults, 
-    CompanyValidation, 
-    PositionType, 
-    HTTPStatus
-)
-
-
+from typing import Optional, List
+from db import JobDatabase
 
 
 @dataclass
 class Company:
-    """
-    Company information with validation and normalization.
-    Designed to work with a database-backed company registry.
-    """
     name: str
     location: str
     db_id: Optional[int] = None
-    industry: Optional[int] = Defaults.DEFAULT_INDUSTRY
-    sponsorships: bool = Defaults.DEFAULT_SPONSORSHIP
+    #sponsorships: bool = False
     company_url: Optional[str] = None
-    
-    # Additional fields for database integration
-    verified: bool = False
-    normalized_name: str = field(init=False)
 
     def __post_init__(self):
-        """Validate and normalize company data"""
-        self._validate_required_fields()
-        self.normalized_name = self._normalize_name(self.name)
-        
-        if self.company_url:
-            self._verify_url()
-
-    def _validate_required_fields(self):
-        """Validate that required fields are present"""
-        if not self.name:
+        if not self.name or len(self.name) < 1:
             raise ValueError("Company name is required")
-        
-        if len(self.name) < CompanyValidation.MIN_NAME_LENGTH:
-            raise ValueError(f"Company name must be at least {CompanyValidation.MIN_NAME_LENGTH} character")
-        
         if not self.location:
-            self.location = Defaults.UNKNOWN_LOCATION
+            self.location = "Unknown"
 
-    def _verify_url(self):
-        """Verify company URL is accessible"""
-        try:
-            response = requests.get(
-                self.company_url, 
-                timeout=CompanyValidation.MAX_URL_TIMEOUT,
-                allow_redirects=True
-            )
-            if response.status_code != HTTPStatus.OK:
-                self.company_url = None
-                self.verified = False
-            else:
-                self.verified = True
-        except (requests.RequestException, requests.Timeout):
-            self.company_url = None
-            self.verified = False
-
-    @staticmethod
-    def _normalize_name(name: str) -> str:
-        """Normalize company name for matching/deduplication"""
-        normalized = name.lower().strip()
-        
-        # Remove common company suffixes
-        for term in CompanyValidation.NORMALIZATION_TERMS:
-            normalized = normalized.replace(term, "")
-        
-        # Remove extra whitespace
-        normalized = " ".join(normalized.split())
-        
-        return normalized
-
-    def get_company_info(self) -> str:
-        """Get formatted company information"""
-        return (
-            f"Company: {self.name} | "
-            f"Location: {self.location} | "
-            f"Industry: {self.industry or 'Unknown'} | "
-            f"Sponsorship: {'Yes' if self.sponsorships else 'No'}"
-        )
-
-    def get_company_name(self) -> str:
-        """Get company name"""
-        return self.name
-
-    def is_sponsored(self) -> bool:
-        """Check if company sponsors visas"""
-        return self.sponsorships
-
-    def get_industry(self) -> Optional[int]:
-        """Get industry code"""
-        return self.industry
-
-    def fuzzy_match(self, other_company: 'Company', match_location: bool = True) -> bool:
-        """
-        Check if this company matches another company.
-        Uses normalized names for better matching.
-        
-        Args:
-            other_company: Company to compare against
-            match_location: Whether to require location match
-        """
-        names_match = self.normalized_name == other_company.normalized_name
-        
-        if match_location:
-            locations_match = (
-                self.location.lower().strip() == 
-                other_company.location.lower().strip()
-            )
-            return names_match and locations_match
-        
-        return names_match
+    #def is_sponsored(self) -> bool:
+     #   return False
 
     def is_valid(self) -> bool:
-        """Check if company has all required information"""
-        return bool(
-            self.name and
-            self.location and
-            len(self.name) >= CompanyValidation.MIN_NAME_LENGTH
-        )
+        return bool(self.name and self.location)
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for database storage"""
+    def to_dict(self) -> dict:
         return {
             "name": self.name,
-            "normalized_name": self.normalized_name,
             "location": self.location,
-            "industry": self.industry,
-            "sponsorships": self.sponsorships,
+        #    "sponsorships": self.sponsorships,
             "company_url": self.company_url,
-            "verified": self.verified
         }
 
     @classmethod
-    def from_dict(cls, data: Dict) -> 'Company':
-        """Create Company from dictionary"""
+    def from_dict(cls, data: dict) -> "Company":
         return cls(
-            name=data.get("normalized_name", Defaults.UNKNOWN_COMPANY),
-            location=data.get("location", Defaults.UNKNOWN_LOCATION),
+            name=data.get("name", "Unknown"),
+            location=data.get("location", "Unknown"),
             db_id=data.get("id"),
-            industry=data.get("industry"),
-            sponsorships=data.get("sponsorships", False),
-            company_url=data.get("company_url")
+        #    sponsorships=data.get("sponsorships", False),
+            company_url=data.get("company_url"),
         )
 
 
 @dataclass
 class Job:
-    """
-    Job posting with comprehensive information.
-    Integrates with Company class for consistent company data.
-    """
+    #TODO: Validate the date collectons and make sure they are in the correct format (e.g. ISO 8601)
+    #TODO: Add a field for the job ID (if we want to store it in the database) and make sure it is unique
+    #TODO: Make sure all helpers are are consistent with this data model (e.g. the company field should be a Company object, not just an ID)
     title: str
-    company: Company
     location: str
     is_remote: bool
     description: str
+    company: int = None  # This should be the company ID, not the full object, to avoid circular references
     apply_url: Optional[str] = None
-    google_link: Optional[str] = None
-    highlights: Dict[str, List[str]] = field(default_factory=lambda: Defaults.EMPTY_HIGHLIGHTS.copy())
-    role_type: str = PositionType.OTHER.value
+    role_type: str = "other"
     pay_range: Optional[tuple] = None
-    
-    # Additional metadata
+    deadline: Optional[str] = None
     date_posted: Optional[str] = None
     source: str = "unknown"
     tags: List[str] = field(default_factory=list)
 
     def __post_init__(self):
-        """Validate job data"""
         if not self.title:
             raise ValueError("Job title is required")
-        
-        if not isinstance(self.company, Company):
-            raise ValueError("Company must be a Company instance")
-        
+        if not isinstance(self.company, int):
+            raise ValueError("Company must be an integer representing the company ID")
         if not self.location:
-            self.location = self.company.location or Defaults.UNKNOWN_LOCATION
-       
-    def get_job_info(self) -> str:
-        """Get formatted job information"""
-       
-        return (
-            f"Job: {self.title} | "
-            f"Location: {self.location} | "
-            f"Remote: {'Yes' if self.is_remote else 'No'} | "
-            f"Type: {self.role_type}"
-        )
-
-    def is_remote_job(self) -> bool:
-        """Check if job is remote"""
-        return self.is_remote
-
-    def has_application_link(self) -> bool:
-        """Check if job has an application link"""
-        return bool(self.apply_url or self.google_link)
+            self.location = "Unknown"
 
     def is_valid(self) -> bool:
-        """Check if job has all required information"""
         return bool(
-            self.title and
-            self.company and
-            self.company.is_valid() and
-            self.location and
-            self.description and
-            self.has_application_link() and
-            self.role_type
+            self.title
+            and isinstance(self.company, int)
+            and self.location
+            and self.description
+            and self.apply_url
         )
 
     def get_salary_info(self) -> str:
-        """Get formatted salary information"""
         if not self.pay_range:
             return "Not specified"
-        
         min_sal, max_sal = self.pay_range
         return f"${min_sal:,} - ${max_sal:,}"
 
-    def to_dict(self) -> Dict:
-        """Convert to dictionary for database storage"""
+    def to_dict(self) -> dict:
         return {
             "title": self.title,
-            "company": self.company.db_id,
+            "company": self.company,
             "location": self.location,
-            "link": self.apply_url or self.google_link,
-            "sponsorship": (
-                "Likely sponsorship" if self.company.is_sponsored()
-                else "No record found"
-            ),
+            "link": self.apply_url,
+            #"sponsorship": "No record",
             "source": self.source,
             "remote": self.is_remote,
             "date_posted": self.date_posted,
             "description": self.description,
             "tags": self.tags,
-            # Additional fields for internal tracking
             "role_type": self.role_type,
             "salary_range": self.pay_range,
         }
 
     @classmethod
-    def to_job_object(cls, job: dict) -> 'Job':
+    def from_dict(cls, job: dict, company: int) -> "Job":
         """
-        Convert raw job dictionary into a Job dataclass.
-        This is used when parsing API responses.
+        Convert a raw job dictionary into a Job instance.
+        Requires a resolved Company object (look it up by company_id before calling this).
         """
-  
-      
-        # Extract salagery range
         salary_range = job.get("salary_range")
-        if salary_range and isinstance(salary_range, (tuple, list)) and len(salary_range) == 2:
-            pay_range = tuple(salary_range)
-        else:
-            pay_range = None
-        
-        # Create job object
+        pay_range = (
+            tuple(salary_range)
+            if isinstance(salary_range, (tuple, list)) and len(salary_range) == 2
+            else None
+        )
+
         return cls(
             title=job.get("title", ""),
-            company=job.get("company_id", Defaults.UNKNOWN_COMPANY),
-            location=job.get("location", Defaults.UNKNOWN_LOCATION),
+            company=company,
+            location=job.get("location", "Unknown"),
             is_remote=job.get("remote", False),
             description=job.get("description", ""),
             apply_url=job.get("link") or job.get("apply_url"),
-            google_link=job.get("google_link"),
-            highlights=job.get("highlights", Defaults.EMPTY_HIGHLIGHTS.copy()),
-            role_type=job.get("position_type") or job.get("role_type", PositionType.OTHER.value),
+            role_type=job.get("role_type", "other"),
             pay_range=pay_range,
             date_posted=job.get("date_posted"),
             source=job.get("source", "unknown"),
-            tags=job.get("tags", [])
+            tags=job.get("tags", []),
         )
+
+ 
     
-    def get_company(self) -> Company:
-        """Get associated Company object"""
-        return self.company
-    
-    def __eq__(self, value):
-        """Equality check based on title, company, and location"""
-        if not isinstance(value, Job):
+
+    def __eq__(self, other):
+        if not isinstance(other, Job):
             return False
         return (
-            self.title == value.title and
-            self.company.fuzzy_match(value.company) and
-            self.location == value.location and self.description == value.description and
-            self.apply_url == value.apply_url
-            and self.google_link == value.google_link
+            self.title == other.title
+            and self.company == other.company
+            and self.location == other.location
+            and self.apply_url == other.apply_url
         )
-  
-
-
-

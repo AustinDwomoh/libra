@@ -4,30 +4,22 @@ azalea.py - Refactored main orchestrator
 import json
 import os
 from typing import List, Dict, Optional
-from dataclasses import dataclass, field
-
+from dataclasses import dataclass
+import emoji
 from services.companies import Company, Job
 from services.company_db import CompanyDatabase
-from services.db_manager import JobDatabase
+from services.db import JobDatabase
 from services.config import Config
 from services.jsearch import JSearchHelper
 from services.simplify import SimplifyHelper
 from services.notify import notify_discord
 from services.constants import (
     PositionType, DatePosted, JobSource,
-    StatsKeys, FilePaths, LogMessages, Defaults
+    StatsKeys, FilePaths, LogMessages
 )
 
-logger = Config.logger
 
 
-def remove_emoji(s: str) -> str:
-    """Remove emoji from string (with fallback if emoji lib not available)"""
-    try:
-        import emoji
-        return emoji.replace_emoji(s, replace='')
-    except Exception:
-        return s
 
 
 @dataclass
@@ -87,23 +79,137 @@ class Azalea:
         """Initialize all helper classes for job sources"""
         # Simplify is always available
         self.helpers[JobSource.SIMPLIFY] = SimplifyHelper()
-        logger.info(f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized")
+        Config.logger.info(f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized")
         
         # JSearch requires API key
         if Config.J_SEARCH_API_KEY:
             self.helpers[JobSource.JSEARCH] = JSearchHelper()
-            logger.info(f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized")
+            Config.logger.info(f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized")
         else:
-            logger.warning(f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled.")
+            Config.logger.warning(f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled.")
     
-   
+   # ============================================================================ #
+   #                                      LOG                                     #
+   # ============================================================================ #
+
     def _log_fetch_start(self, source: JobSource, position_type: PositionType, date_posted: DatePosted):
-        """Log the start of a fetch operation"""
-        logger.info("=" * 60)
-        logger.info(LogMessages.fetch_start(source, position_type, date_posted))
-        logger.info("=" * 60)
+        """
+        This function logs the start of a data fetch operation with information about the job source,
+        position type, and date posted.
+        
+        :param source: JobSource is an enum representing the source of the job listings 
+        :type source: JobSource
+        :param position_type: PositionType is an enumeration that represents the type of position being
+        fetched. It could be values like full-time, part-time, internship, contract, etc
+        :type position_type: PositionType
+        :param date_posted: The `date_posted` parameter in the `_log_fetch_start` method is of type
+        `DatePosted`. This parameter likely represents the date when a job posting was posted or made
+        available
+        :type date_posted: DatePosted
+        """
+        
+        Config.logger.info("=" * 60)
+        Config.logger.info(LogMessages.fetch_start(source, position_type, date_posted))
+        Config.logger.info("=" * 60)
    
+    def _log_section(self, title: str):
+        """Log a section divider"""
+        Config.logger.info("=" * 60)
+        Config.logger.info(title)
+        Config.logger.info("=" * 60)
+    
+ # ============================================================================ #
+ #                                     SAVE                                     #
+ # ============================================================================ #
+    def save_to_json(self, jobs: List[Dict], filepath: str = FilePaths.SCRAPED_JOBS_JSON):
+        """Save jobs to JSON file for backup/debugging"""
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(jobs, f, indent=2, ensure_ascii=False)
+            Config.logger.info(f"✓ Saved {len(jobs)} jobs to {filepath}")
+        except Exception as e:
+            Config.logger.warning(f"Could not save jobs to JSON: {e}")
+            self.stats.errors += 1
+    
+    def save_to_database(self, jobs: List[Dict]) -> int:
+        """Save jobs to PostgreSQL database"""
+        Config.logger.info("=" * 60)
+        Config.logger.info("SAVING TO DATABASE")
+        Config.logger.info("=" * 60)
+        
+        with JobDatabase() as db:
+            inserted = db.insert_jobs_bulk(jobs)
+            total_jobs = db.count_jobs()
+            
+            Config.logger.info(f"✓ Inserted {inserted} jobs")
+            Config.logger.info(f"✓ Total jobs in database: {total_jobs}")
+            
+            self.stats.inserted = inserted
+            return inserted
+        
+
+    # ============================================================================ #
+    #                                   FETCH FN                                   #
+    # ============================================================================ #
+    def fetch_from_source( self,  source: JobSource,  position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK,  **kwargs) -> List[Dict]:
+        """Fetch jobs from a specific source"""
+        
+        self._log_fetch_start(source, position_type, date_posted)
+        helper = self.helpers.get(source)
+        if not helper:
+            Config.logger.warning(f"Helper for '{source}' not available")
+            return []
+        try:
+            match source:
+                case JobSource.JSEARCH:
+                    queries = kwargs.get('queries')
+                    jobs = helper.fetch_jobs( queries,  position_type=position_type,  date_posted=date_posted)
+                case _:
+                    jobs = helper.fetch_jobs()
+            
+            self.stats.increment_source(source, len(jobs))
+            return jobs
+        except Exception as e:
+            Config.logger.error(f"{source.value.capitalize()} scraping failed: {e}")
+            self.stats.errors += 1
+            return []
+
+    def fetch_all_sources( self,  position_type: PositionType = PositionType.INTERN,  jsearch_queries: Optional[List[str]] = None) -> List[Dict]:
+        """Fetch jobs from all available sources"""
+        all_jobs = []
+        
+        # Fetch from Simplify (internships only)
+        if position_type in [PositionType.INTERN, PositionType.HYBRID]:
+            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY)
+            all_jobs.extend(simplify_jobs)
+
+        # Fetch from JSearch if available
+        if JobSource.JSEARCH in self.helpers:
+            jsearch_jobs = self.fetch_from_source(JobSource.JSEARCH, position_type=position_type, queries=jsearch_queries)
+            all_jobs.extend(jsearch_jobs)
+        
+        self.stats.total_fetched = len(all_jobs)
+        Config.logger.info(f"Total positions fetched from all sources: {self.stats.total_fetched}")
+        
+        return all_jobs
+
+
+    # ============================================================================ #
+    #                                     Utils                                    #
+    # ============================================================================ #
+
     def deduplicate_jobs(self, jobs: List[Job]) -> List[Job]:
+        """
+        The `deduplicate_jobs` function removes duplicate jobs from a list based on company, title, and
+        location.
+        
+        :param jobs: A list of Job objects that you want to deduplicate based on the combination of
+        company, title, and location
+        :type jobs: List[Job]
+        :return: The `deduplicate_jobs` method returns a list of unique Job objects after removing any
+        duplicates based on the combination of company, title, and location attributes.
+        """
         """Remove duplicate jobs based on company + title + location"""
         seen = set()
         unique_jobs = []
@@ -118,102 +224,52 @@ class Azalea:
         
         self.stats.unique_jobs = len(unique_jobs)
         
-        logger.info(LogMessages.deduplication_result(len(jobs), len(unique_jobs)))
+        Config.logger.info(LogMessages.deduplication_result(len(jobs), len(unique_jobs)))
         return unique_jobs
 
     def _create_job_key(self, job: Dict) -> tuple:
         """Create a unique key for job deduplication"""
-        company = remove_emoji(job.get("company", "")).strip().lower()
-        title = job.get("title", "").strip().lower()
-        location = job.get("location", "").strip().lower()
+        company = emoji.replace_emoji(job.get("company", ""), replace='').strip().lower() 
+        title = emoji.replace_emoji(job.get("title", ""), replace='').strip().lower()
+        location = emoji.replace_emoji(job.get("location", ""), replace='').strip().lower()
         return (company, title, location)
-    
-    def save_to_json(self, jobs: List[Dict], filepath: str = FilePaths.SCRAPED_JOBS_JSON):
-        """Save jobs to JSON file for backup/debugging"""
-        try:
-            os.makedirs(os.path.dirname(filepath), exist_ok=True)
-            with open(filepath, 'w', encoding='utf-8') as f:
-                json.dump(jobs, f, indent=2, ensure_ascii=False)
-            logger.info(f"✓ Saved {len(jobs)} jobs to {filepath}")
-        except Exception as e:
-            logger.warning(f"Could not save jobs to JSON: {e}")
-            self.stats.errors += 1
-    
-    def save_to_database(self, jobs: List[Dict]) -> int:
-        """Save jobs to PostgreSQL database"""
-        logger.info("=" * 60)
-        logger.info("SAVING TO DATABASE")
-        logger.info("=" * 60)
-        
-        with JobDatabase() as db:
-            inserted = db.insert_jobs_bulk(jobs)
-            total_jobs = db.count_jobs()
-            
-            logger.info(f"✓ Inserted {inserted} jobs")
-            logger.info(f"✓ Total jobs in database: {total_jobs}")
-            
-            self.stats.inserted = inserted
-            return inserted
-        
 
-        # ============================================================================ #
-        #                                   FECTH FN                                   #
-        # ============================================================================ #
-        def fetch_from_source( self,  source: JobSource,  position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK,  **kwargs) -> List[Dict]:
-        """Fetch jobs from a specific source"""
+    def print_summary(self):
+        """Print execution summary"""
+        self._log_section("EXECUTION SUMMARY")
         
-        self._log_fetch_start(source, position_type, date_posted)
-        helper = self.helpers.get(source)
-        if not helper:
-            logger.warning(f"Helper for '{source}' not available")
-            return []
-        try:
-            jobs = self._fetch_from_helper(helper, source, position_type, date_posted, **kwargs)
-            self.stats.increment_source(source, len(jobs))
-            return jobs
-            
-        except Exception as e:
-            logger.error(f"{source.value.capitalize()} scraping failed: {e}")
-            self.stats.errors += 1
-            return []
+        Config.logger.info("Sources:")
+        Config.logger.info(f"  • Simplify GitHub: {self.stats.simplify} jobs")
+        Config.logger.info(f"  • JSearch API: {self.stats.jsearch} jobs")
         
-    def _fetch_from_helper(self, source: JobSource, position_type: PositionType, date_posted: DatePosted, **kwargs) -> List[Dict]:
-        """Fetch jobs from a specific helper"""
-        helper = self.helpers.get(source)
-        if not helper:
-            logger.warning(f"Helper for '{source}' not available")
-            return []   
-        if source == JobSource.JSEARCH:
-            queries = kwargs.get('queries')
-            return helper.fetch_jobs( queries,  position_type=position_type,  date_posted=date_posted)
-        else:
-            return helper.fetch_jobs()
+        Config.logger.info("")
+        Config.logger.info("Results:")
+        Config.logger.info(f"  • Total fetched: {self.stats.total_fetched} jobs")
+        Config.logger.info(f"  • After deduplication: {self.stats.unique_jobs} jobs")
+        Config.logger.info(f"  • Inserted to DB: {self.stats.inserted} jobs")
+        Config.logger.info(f"  • With sponsorship: {self.stats.with_sponsorship} jobs")
+        Config.logger.info("=" * 60)
 
-    def fetch_all_sources( self,  position_type: PositionType = PositionType.INTERN,  jsearch_queries: Optional[List[str]] = None) -> List[Dict]:
-        """Fetch jobs from all available sources"""
-        all_jobs = []
+    def build_discord_message(self, mention_user_id: Optional[str] = None) -> str:
+        """Build Discord notification message"""
+        lines = []
         
-        # Fetch from Simplify (internships only)
-        if position_type in [PositionType.INTERN, PositionType.HYBRID]:
-            simplify_jobs = self.fetch_from_source(JobSource.SIMPLIFY)
-            all_jobs.extend(simplify_jobs)
-
-        # Fetch from JSearch if available
-        if JobSource.JSEARCH in self.helpers:
-            jsearch_jobs = self.fetch_from_source(
-                JobSource.JSEARCH, 
-                position_type=position_type, 
-                queries=jsearch_queries
-            )
-            all_jobs.extend(jsearch_jobs)
+        if mention_user_id:
+            lines.append(f"<@{mention_user_id}>")
         
-        self.stats.total_fetched = len(all_jobs)
-        logger.info(f"Total positions fetched from all sources: {self.stats.total_fetched}")
+        lines.extend([
+            "📢 **Libra Job Scraper Report**",
+            "📊 **Job Statistics**",
+            f"  • Total fetched: {self.stats.total_fetched} jobs",
+            f"  • After deduplication: {self.stats.unique_jobs} jobs",
+            f"  • Inserted to DB: {self.stats.inserted} jobs",
+            f"  • With sponsorship: {self.stats.with_sponsorship} jobs",
+            "",
+            "✅ Completed successfully!"
+        ])
         
-        return all_jobs
+        return "\n".join(lines)
 
-
- 
     def run(self,  position_type: PositionType = PositionType.INTERN,  save_json: bool = True, jsearch_queries: Optional[List[str]] = None) -> Dict:
         """Main orchestration method"""
         
@@ -226,7 +282,7 @@ class Azalea:
             #probably not the best place for this but whatever
             self.company_cache.add(CompanyDatabase.get_all_sponsors()) # Preload company cache
             if not all_jobs:
-                logger.warning("No jobs found to process")
+                Config.logger.warning("No jobs found to process")
                 return self.stats.to_dict()
 
             # Step 2: Deduplicate
@@ -249,51 +305,9 @@ class Azalea:
 
         except Exception as e:
             self.stats.errors = 1
-            logger.error(f"Error in run process: {e}", exc_info=True)
+            Config.logger.error(f"Error in run process: {e}", exc_info=True)
             raise
 
-
-    def _log_section(self, title: str):
-        """Log a section divider"""
-        logger.info("=" * 60)
-        logger.info(title)
-        logger.info("=" * 60)
-    
-    def print_summary(self):
-        """Print execution summary"""
-        self._log_section("EXECUTION SUMMARY")
-        
-        logger.info("Sources:")
-        logger.info(f"  • Simplify GitHub: {self.stats.simplify} jobs")
-        logger.info(f"  • JSearch API: {self.stats.jsearch} jobs")
-        
-        logger.info("")
-        logger.info("Results:")
-        logger.info(f"  • Total fetched: {self.stats.total_fetched} jobs")
-        logger.info(f"  • After deduplication: {self.stats.unique_jobs} jobs")
-        logger.info(f"  • Inserted to DB: {self.stats.inserted} jobs")
-        logger.info(f"  • With sponsorship: {self.stats.with_sponsorship} jobs")
-        logger.info("=" * 60)
-
-    def build_discord_message(self, mention_user_id: Optional[str] = None) -> str:
-        """Build Discord notification message"""
-        lines = []
-        
-        if mention_user_id:
-            lines.append(f"<@{mention_user_id}>")
-        
-        lines.extend([
-            "📢 **Libra Job Scraper Report**",
-            "📊 **Job Statistics**",
-            f"  • Total fetched: {self.stats.total_fetched} jobs",
-            f"  • After deduplication: {self.stats.unique_jobs} jobs",
-            f"  • Inserted to DB: {self.stats.inserted} jobs",
-            f"  • With sponsorship: {self.stats.with_sponsorship} jobs",
-            "",
-            "✅ Completed successfully!"
-        ])
-        
-        return "\n".join(lines)
 
 
 def main():
