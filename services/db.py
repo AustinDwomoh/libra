@@ -123,7 +123,7 @@ class JobDatabase:
     # -------------------------
     # UPSERT (INSERT or UPDATE)
     # -------------------------
-    async def upsert(self, table: str, data: dict, conflict_column: str ):
+    async def upsert(self, table: str, data: dict, conflict_column: str = None):
         """Insert or update a record based on conflict column
             To use this method, provide the following
             its important you know the unique constraint of the table you are upserting to.  The conflict_column parameter should be set to that unique constraint column.
@@ -142,13 +142,13 @@ class JobDatabase:
 
             placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
             cols = ", ".join(columns)
-            update_cols = ", ".join(f"{k} = EXCLUDED.{k}" for k in columns if k != conflict_column)
-
+            if conflict_column:
+                update_cols = ", ".join(f"{k} = EXCLUDED.{k}" for k in columns if k != conflict_column)
+            on_conflict = f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}" if conflict_column else "ON CONFLICT DO NOTHING"
             sql = f"""
                 INSERT INTO {table} ({cols}) 
                 VALUES ({placeholders})
-                ON CONFLICT ({conflict_column}) 
-                DO UPDATE SET {update_cols}
+                {on_conflict}
                 RETURNING *;
             """
 

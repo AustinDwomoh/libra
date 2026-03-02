@@ -1,22 +1,25 @@
 """
 simplify.py - Refactored with constants and improved structure
 """
+import asyncio
 from typing import List, Dict, Optional
 import requests
 import emoji
 from bs4 import BeautifulSoup
 from services.config import Config
+from services.companies import Company, Job
 from services.constants import (
     JobSource,
     SimplifyConfig,
     HTTPStatus,
     Defaults
 )
+from services.db import JobDatabase
 
 logger = Config.logger
 
 
-class SimplifyHelper:
+class Simplify:
     """Helper class for scraping Simplify GitHub README"""
     
     def __init__(self, url: Optional[str] = None):
@@ -52,7 +55,9 @@ class SimplifyHelper:
         no_emoji = emoji.replace_emoji(name, replace='')
         return no_emoji.strip().lower()
     
-    def parse_tables(self) -> List[Dict]:
+
+    
+    async def parse_tables(self) -> List[Job]:
         """Parse HTML tables to extract job information from Simplify"""
         logger.info("Simplify: Parsing job tables...")
         
@@ -66,7 +71,7 @@ class SimplifyHelper:
         self.tables_processed = 0
         
         for table_idx, table in enumerate(tables):
-            jobs = self._parse_single_table(table, table_idx)
+            jobs = await self._parse_single_table(table, table_idx)
             all_jobs.extend(jobs)
             self.tables_processed += 1
         
@@ -75,7 +80,7 @@ class SimplifyHelper:
         
         return all_jobs
     
-    def _parse_single_table(self, table, table_idx: int) -> List[Dict]:
+    async def _parse_single_table(self, table, table_idx: int) -> List[Job]:
         """Parse a single HTML table"""
         jobs = []
         current_company: Optional[str] = None
@@ -93,9 +98,9 @@ class SimplifyHelper:
             if not current_company:
                 continue
             
-            job = self._extract_job_from_row(tds, current_company)
+            job = await self._extract_job_from_row(tds, current_company)
             
-            if self._is_valid_job(job):
+            if job.is_valid():
                 jobs.append(job)
         
         logger.debug(
@@ -126,17 +131,32 @@ class SimplifyHelper:
         
         return current_company
     
-    def _extract_job_from_row(self, tds, company: str) -> Dict:
+    async def _extract_job_from_row(self, tds, company: str) -> Job:
         """Extract job information from a table row"""
-        job = {
-            "company": company,
-            "title": self._extract_title(tds),
-            "location": self._extract_location(tds),
-            "link": self._extract_link(tds),
-            "source": JobSource.SIMPLIFY.value
+        compnay_dict = {
+            "name": company.lower()
         }
+        DB = await JobDatabase.create()
+        compnay_dict = await DB.upsert(table="company",data = compnay_dict)  # Upsert company and get the record with ID
+        if not compnay_dict:
+            compnay_dict = await DB.selectOne(table="company", filters={"name": company.lower()})
         
-        return job
+        #employment_types = job.get("job_employment_types", [])
+        refined_job = {
+            "title": self._extract_title(tds).lower(),
+            "location": self._extract_location(tds) or Defaults.LOCATION_NOT_SPECIFIED,
+            "is_remote": "",
+            "description": "",
+            "apply_url":  self._extract_link(tds),
+            "role_type": "other",  # Simplify doesn't provide role type, so we default to "other"
+            "salary_range": None,  # Simplify doesn't provide salary info
+            "source": "simplify",
+            "tags": [],
+            "date_posted": None,
+
+        }
+        return Job.from_dict(refined_job, company=compnay_dict.get("id"))
+        
     
     def _extract_title(self, tds) -> str:
         """Extract job title from row"""
@@ -194,28 +214,21 @@ class SimplifyHelper:
         
         return False
     
-    def _is_valid_job(self, job: Dict) -> bool:
-        """Validate job entry has all required fields"""
-        required_fields = ["company", "title", "location", "link"]
-        
-        for field in required_fields:
-            if not job.get(field):
-                return False
-        
-        return True
     
-    def fetch_jobs(self) -> List[Dict]:
+    
+    async def fetch_jobs(self) -> List[Job]:
         """
         Main method: Fetch and parse jobs from Simplify.
         Returns list of job dictionaries.
         """
         self.fetch_readme()
-        jobs = self.parse_tables()
+        jobs = await self.parse_tables()
         
         logger.info(
             f"Simplify: Completed - {self.tables_processed} tables processed, "
             f"{self.jobs_found} jobs found"
         )
+        
         
         return jobs
     
@@ -237,8 +250,9 @@ def clean_company_name(name: str) -> str:
 
 
 if __name__ == "__main__":
-    helper = SimplifyHelper()
-    jobs = helper.fetch_jobs()
+    helper = Simplify()
+    jobs = asyncio.run(helper.fetch_jobs())
+    jobs = [job.to_dict(job) for job in jobs]
     with open("simplify.json", "w") as f:
         import json
         json.dump(jobs, f, indent=2)

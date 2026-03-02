@@ -1,6 +1,10 @@
 
+import json
 import os,logging
 from dotenv import load_dotenv
+from typing import List, Dict
+
+from services.constants import FilePaths
 load_dotenv()
 class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
@@ -9,10 +13,11 @@ class Config:
     #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     #GOOGLE_CX = os.getenv("GOOGLE_CX")
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
-    #REMOTEOK_API_URL = "https://remoteok.com/api"
+    REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
     logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
+    GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")
     DB_NAME = os.getenv("DB_NAME")
     DB_USER = os.getenv("DB_USER")
@@ -20,3 +25,15 @@ class Config:
     DB_PORT = os.getenv("DB_PORT", 5432)
     DISCLAIMER_TEXT = "Data provided is for informational purposes only. We do not guarantee job availability or sponsorship status. Always verify details with the employer directly."
     DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
+
+    @classmethod
+    def save_to_json(cls, jobs: List[Dict], filepath: str = FilePaths.SCRAPED_JOBS_JSON):
+        """Save jobs to JSON file for backup/debugging"""
+        try:
+            os.makedirs(os.path.dirname(filepath), exist_ok=True)
+            with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(jobs, f, indent=2, ensure_ascii=False)
+            cls.logger.info(f"✓ Saved {len(jobs)} jobs to {filepath}")
+        except Exception as e:
+            cls.logger.warning(f"Could not save jobs to JSON: {e}")
+           

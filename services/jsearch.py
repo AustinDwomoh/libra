@@ -1,12 +1,15 @@
 """
 jsearch.py - Refactored with constants
 """
+import asyncio
 from typing import List, Dict
 import requests,json,time
 from services.companies import Job
 from services.config import Config
 from services.constants import (PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults)
-from db import JobDatabase
+from services.db import JobDatabase
+
+
 
 class JSearch:
     """Helper class for JSearch API integration via OpenWebNinja"""
@@ -88,15 +91,16 @@ class JSearch:
         response.raise_for_status()
         return True
 
-    def _process_response(
+    async def _process_response(
         self,
         response: requests.Response,
-        position_type: PositionType,
         search_query: str,
-    ) -> List[Dict]:
+    ) -> List[Job]:
         """Process API response and filter jobs"""
+       
         data = response.json()
-        jobs = data.get("data", [])
+        jobs = data.get("data", []) or data
+        
 
         Config.logger.debug(f"Jobs found: {len(jobs)}")
         
@@ -104,7 +108,7 @@ class JSearch:
 
         Config.logger.info(LogMessages.jobs_found(len(jobs), search_query))
 
-        return [self._map_job(job) for job in jobs]
+        return [await self._map_job(job) for job in jobs]
 
     def _save_raw_jobs(self, jobs: List[Dict]) -> None:
         """Save raw job data for debugging"""
@@ -151,20 +155,34 @@ class JSearch:
 
 
 
-    def _map_job(self, job: Dict) -> Job:
+    async def _map_job(self, job: Dict) -> Job:
         """Map JSearch response to standard job format"""
         compnay_dict = {
-            "name": job.get("employer_name"),
-            "company_url": job.get("employer_website"),
-            "description": job.get("employer_description"),
+            "name": job.get("employer_name").lower(),
+            "company_url": job.get("employer_website")
         }
-        company = JobDatabase.upsert("company", compnay_dict)
-        employment_types = job.get("job_employment_types", [])
-        job["position_type"] = self._get_position_type(employment_types)   # reuses unified helper
-        job["location"] = self._get_location(job)
-        job["salary_range"] = self._extract_salary(job)
+        DB = await JobDatabase.create()
 
-        return Job.from_dict(job, company=company)
+        company = await DB.upsert(table="company",data = compnay_dict)  # Upsert company and get the record with ID
+        if not company:
+            company = await DB.selectOne(table="company", filters={"name": compnay_dict["name"]})
+       
+        employment_types = job.get("job_employment_types", [])
+        refined_job = {
+            "title": job.get("job_title", "Unknown").lower(),
+            "location": job.get("job_location") or Defaults.LOCATION_NOT_SPECIFIED,
+            "is_remote": job.get("job_is_remote", False),
+            "description": job.get("job_description", ""),
+            "apply_url": job.get("job_apply_link") or job.get("job_google_link"),
+            "role_type": self._get_position_type(employment_types).value,
+            "salary_range": self._extract_salary(job),
+            "source": "jsearch",
+            "tags": job.get("job_highlights"),
+            "date_posted": job.get("job_posted_at_datetime_utc"),
+
+        }
+   
+        return Job.from_dict(refined_job, company=company.get("id"))
 
     def _extract_salary(self, job: Dict):
         """Extract salary range from job data"""
@@ -172,26 +190,13 @@ class JSearch:
         max_sal = job.get("job_max_salary")
         return (min_sal, max_sal) if min_sal and max_sal else None
 
-    def _get_location(self, job: Dict) -> str:
-        """Extract location from JSearch job"""
-        parts = [p for p in [job.get("job_city", ""), job.get("job_state", ""), job.get("job_country", "")] if p]
-        return ", ".join(parts) if parts else Defaults.LOCATION_NOT_SPECIFIED
-
-    def _deduplicate_jobs(self, jobs: List[Dict]) -> List[Dict]:
-        """Remove duplicate jobs based on job_id"""
-        unique_jobs = []
-        for job in jobs:
-            job_id = job.get("job_id")
-            if job_id and job_id not in self.seen_jobs:
-                self.seen_jobs.add(job_id)
-                unique_jobs.append(job)
-        return unique_jobs
+ 
 
     # ============================================================================ #
     #                                 FETCH FNS                                    #
     # ============================================================================ #
 
-    def fetch_jobs( self, queries: List[str] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
+    async def fetch_jobs( self, queries: List[str] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
         """
         Fetch jobs across multiple search queries with rate limiting.
 
@@ -214,18 +219,20 @@ class JSearch:
 
         for i, query in enumerate(queries):
             Config.logger.info(f"JSearch: Query {i + 1}/{len(queries)}")
-            jobs = self.fetch_positions(query, position_type=position_type, date_posted=date_posted)
+            jobs = await self.fetch_positions(query, position_type=position_type, date_posted=date_posted)
             all_jobs.extend(jobs)
 
             if i < len(queries) - 1:
                 Config.logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
-                time.sleep(rate_limit_delay)
+                await asyncio.sleep(rate_limit_delay)
+        print(f"Total jobs before deduplication: {len(all_jobs)}")
 
-        unique_jobs = self._deduplicate_jobs(all_jobs)
+        unique_jobs = set(all_jobs)  # Rely on Job's __hash__ and __eq__ for deduplication
+        print(f"Total unique jobs after deduplication: {len(unique_jobs)}")
         Config.logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
         return unique_jobs
 
-    def fetch_positions( self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT,) -> List[Dict]:
+    async  def fetch_positions( self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT,) -> List[Job]:
         """
         Fetch a single page of positions from the JSearch API.
 
@@ -237,7 +244,7 @@ class JSearch:
             retry_count:   Number of retry attempts on transient failures.
 
         Returns:
-            List of standardised job dicts, or [] on failure.
+            List of Job objects, or [] on failure.
         """
         search_query = self._build_search_query(query, position_type)
         Config.logger.info(
@@ -249,11 +256,12 @@ class JSearch:
         for attempt in range(retry_count):
             try:
                 response = self._make_request(params)
-
+                
+                
                 if not self._handle_response_status(response, attempt, retry_count):
-                    continue
-
-                return self._process_response(response, position_type, search_query)
+                    return []
+                
+                return await self._process_response(response, search_query)
 
             except requests.RequestException as e:
                 Config.logger.error(f"JSearch API error: {e}")
@@ -266,12 +274,14 @@ class JSearch:
         return []
 
 
-def main():
+async def main():
     jsearch_helper = JSearch()
-    jobs = jsearch_helper.fetch_jobs( position_type=PositionType.INTERN, date_posted=DatePosted.WEEK )
+    jobs = await jsearch_helper.fetch_jobs( position_type=PositionType.INTERN, date_posted=DatePosted.WEEK )
+    jobs = [job.to_dict(job) for job in jobs]  # Convert Job objects to dicts for JSON serialization
+    print(f"Total unique jobs fetched: {len(jobs)}")
     with open('jsearch_jobs.json', 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)
     Config.logger.info(f"Total jobs fetched: {len(jobs)}")
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

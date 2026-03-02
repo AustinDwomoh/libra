@@ -1,12 +1,12 @@
 from dataclasses import dataclass, field
 from typing import Optional, List
-from db import JobDatabase
+
+import uuid
 
 
 @dataclass
 class Company:
     name: str
-    location: str
     db_id: Optional[int] = None
     #sponsorships: bool = False
     company_url: Optional[str] = None
@@ -14,19 +14,13 @@ class Company:
     def __post_init__(self):
         if not self.name or len(self.name) < 1:
             raise ValueError("Company name is required")
-        if not self.location:
-            self.location = "Unknown"
-
-    #def is_sponsored(self) -> bool:
-     #   return False
-
+     
     def is_valid(self) -> bool:
         return bool(self.name and self.location)
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
-            "location": self.location,
         #    "sponsorships": self.sponsorships,
             "company_url": self.company_url,
         }
@@ -35,7 +29,6 @@ class Company:
     def from_dict(cls, data: dict) -> "Company":
         return cls(
             name=data.get("name", "Unknown"),
-            location=data.get("location", "Unknown"),
             db_id=data.get("id"),
         #    sponsorships=data.get("sponsorships", False),
             company_url=data.get("company_url"),
@@ -51,30 +44,28 @@ class Job:
     location: str
     is_remote: bool
     description: str
-    company: int = None  # This should be the company ID, not the full object, to avoid circular references
+    company: uuid.UUID = None  # This should be the company ID, not the full object, to avoid circular references
     apply_url: Optional[str] = None
     role_type: str = "other"
     pay_range: Optional[tuple] = None
-    deadline: Optional[str] = None
     date_posted: Optional[str] = None
     source: str = "unknown"
-    tags: List[str] = field(default_factory=list)
+    tags: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.title:
             raise ValueError("Job title is required")
-        if not isinstance(self.company, int):
-            raise ValueError("Company must be an integer representing the company ID")
+        if not isinstance(self.company, uuid.UUID):
+            raise ValueError("Company must be a UUID representing the company ID")
         if not self.location:
             self.location = "Unknown"
 
     def is_valid(self) -> bool:
         return bool(
             self.title
-            and isinstance(self.company, int)
+            and isinstance(self.company, uuid.UUID)
             and self.location
-            and self.description
-            and self.apply_url
+            and self.apply_url or  self.description
         )
 
     def get_salary_info(self) -> str:
@@ -83,24 +74,9 @@ class Job:
         min_sal, max_sal = self.pay_range
         return f"${min_sal:,} - ${max_sal:,}"
 
-    def to_dict(self) -> dict:
-        return {
-            "title": self.title,
-            "company": self.company,
-            "location": self.location,
-            "link": self.apply_url,
-            #"sponsorship": "No record",
-            "source": self.source,
-            "remote": self.is_remote,
-            "date_posted": self.date_posted,
-            "description": self.description,
-            "tags": self.tags,
-            "role_type": self.role_type,
-            "salary_range": self.pay_range,
-        }
 
     @classmethod
-    def from_dict(cls, job: dict, company: int) -> "Job":
+    def from_dict(cls, job: dict, company: uuid.UUID) -> "Job":
         """
         Convert a raw job dictionary into a Job instance.
         Requires a resolved Company object (look it up by company_id before calling this).
@@ -123,9 +99,24 @@ class Job:
             pay_range=pay_range,
             date_posted=job.get("date_posted"),
             source=job.get("source", "unknown"),
-            tags=job.get("tags", []),
+            tags=job.get("tags", {}),
         )
 
+    @classmethod
+    def to_dict(cls, job: "Job") -> dict:
+        return {
+            "title": job.title,
+            "company": str(job.company) if job.company else None,
+            "location": job.location,
+            "is_remote": job.is_remote,
+            "description": job.description,
+            "apply_url": job.apply_url,
+            "role_type": job.role_type,
+            "pay_range": job.pay_range,
+            "date_posted": job.date_posted,
+            "source": job.source,
+            "tags": job.tags,
+        }
  
     
 
@@ -138,3 +129,6 @@ class Job:
             and self.location == other.location
             and self.apply_url == other.apply_url
         )
+    
+    def __hash__(self):
+        return hash((self.title, self.company, self.location, self.apply_url))
