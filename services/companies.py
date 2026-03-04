@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import datetime
 from typing import Optional, List
 
 import uuid
@@ -118,6 +119,25 @@ class Job:
             "tags": job.tags,
         }
  
+    @classmethod
+    def to_dict_for_db(cls, job: "Job") -> dict:
+        """
+        Convert a Job instance into a dictionary suitable for database insertion.
+        This may involve converting certain fields (e.g. company ID to string) and ensuring all required fields are present.
+        """
+        return {
+            "title": job.title,
+            "company": job.company,  # Assuming this is already the company ID (UUID)
+            "location": job.location,
+            "is_remote": job.is_remote,
+            "description": job.description,
+            "apply_url": job.apply_url,
+            "role_type": job.role_type,
+            "pay_range": job.pay_range,
+            "date_posted": datetime.datetime.strptime(job.date_posted, "%Y-%m-%d") if job.date_posted else None,
+            "source": job.source,
+            "tags": dict(job.tags),
+        }
     
 
     def __eq__(self, other):
