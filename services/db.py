@@ -1,14 +1,16 @@
-
 from services.config import Config
 import ssl, asyncpg, json
 
+
 class JobDatabase:
     "Make asynchronous database connection and operations using psycopg2 use rimuru as template"
+
     FETCH = "fetch"
     FETCHVAL = "fetchval"
     FETCHROW = "fetchrow"
-    _instance = None          
-    _pool: asyncpg.Pool = None 
+    _instance = None
+    _pool: asyncpg.Pool = None
+
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
 
@@ -20,7 +22,7 @@ class JobDatabase:
         """
         The `create` function is an asynchronous method that creates a connection pool to a PostgreSQL
         database with specified configurations.
-        
+
         :param cls: The `cls` parameter in the `create` method is a reference to the class itself. In this
         context, it is used to access class attributes and methods
         :return: The `create` method is returning an instance of the class `cls`. If `cls._instance` is
@@ -49,16 +51,22 @@ class JobDatabase:
         cls._instance = cls(cls._pool)
         return cls._instance
 
-
     # ----------------------------------------------------
     #  CRUD
     # ----------------------------------------------------
-    async def select(self, table: str, columns: list = None, filters: dict = None, 
-                raw_where: str = None, raw_params: list = None,
-                order_by: str = None, limit: int = None):
+    async def select(
+        self,
+        table: str,
+        columns: list = None,
+        filters: dict = None,
+        raw_where: str = None,
+        raw_params: list = None,
+        order_by: str = None,
+        limit: int = None,
+    ):
         """
         Select records with optional filtering
-        
+
         :param table: Table name
         :param columns: List of columns to select (default: all)
         :param filters: Dictionary of column=value filters
@@ -104,10 +112,16 @@ class JobDatabase:
             Config.logger.error(f"Error during select from {table}: {e}")
             raise
 
-    async def selectOne(self, table: str, columns: list = None, filters: dict = None, order_by: str = None):
+    async def selectOne(
+        self,
+        table: str,
+        columns: list = None,
+        filters: dict = None,
+        order_by: str = None,
+    ):
         """
         Select a single record with optional filtering
-        
+
         :param table: Table name
         :param columns: List of columns to select (default: all)
         :param filters: Dictionary of column=value filters
@@ -119,20 +133,20 @@ class JobDatabase:
         except Exception as e:
             Config.logger.error(f"Error during selectOne from {table}: {e}")
             raise
-   
+
     # -------------------------
     # UPSERT (INSERT or UPDATE)
     # -------------------------
     async def upsert(self, table: str, data: dict, conflict_column: str = None):
         """Insert or update a record based on conflict column
-            To use this method, provide the following
-            its important you know the unique constraint of the table you are upserting to.  The conflict_column parameter should be set to that unique constraint column.
-            
-                parameters:
-                    :param table: Table name
-                    :param data: Dictionary of column-value pairs
-                    :param conflict_column: Column name to check for conflicts
-            """
+        To use this method, provide the following
+        its important you know the unique constraint of the table you are upserting to.  The conflict_column parameter should be set to that unique constraint column.
+
+            parameters:
+                :param table: Table name
+                :param data: Dictionary of column-value pairs
+                :param conflict_column: Column name to check for conflicts
+        """
         try:
             columns = list(data.keys())
             values = [
@@ -142,9 +156,18 @@ class JobDatabase:
 
             placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
             cols = ", ".join(columns)
+            on_conflict = f"ON CONFLICT DO NOTHING"
             if conflict_column:
-                update_cols = ", ".join(f"{k} = EXCLUDED.{k}" for k in columns if k != conflict_column)
-            on_conflict = f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}" if conflict_column else "ON CONFLICT DO NOTHING"
+                update_fields = [k for k in columns if k != conflict_column]
+                if update_fields:
+                    update_cols = ", ".join(
+                        f"{k} = EXCLUDED.{k}" for k in update_fields
+                    )
+                    on_conflict = (
+                        f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}"
+                    )
+        
+                
             sql = f"""
                 INSERT INTO {table} ({cols}) 
                 VALUES ({placeholders})
@@ -153,28 +176,70 @@ class JobDatabase:
             """
 
             async with self.pool.acquire() as conn:
-                row = await conn.fetchrow(sql, *values) 
+                row = await conn.fetchrow(sql, *values)
                 return dict(row) if row else None
         except Exception as e:
             Config.logger.error(f"Error during upsert to {table}: {e}")
             raise
         # -------------------------
         # DELETE
-    
+
+    # -------------------------
+    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str):
+        if not rows:
+            return []
+
+        columns = list(rows[0].keys())
+        cols = ", ".join(columns)
+
+        # Build placeholders
+        values = []
+        placeholder_groups = []
+        param_index = 1
+
+        for row in rows:
+            group = []
+            for col in columns:
+                values.append(row[col])
+                group.append(f"${param_index}")
+                param_index += 1
+            placeholder_groups.append(f"({', '.join(group)})")
+
+        placeholders = ", ".join(placeholder_groups)
+
+        # Build update clause
+        update_cols = ", ".join(
+            f"{col} = EXCLUDED.{col}" for col in columns if col != conflict_column
+        )
+
+        sql = f"""
+            INSERT INTO {table} ({cols})
+            VALUES {placeholders}
+            ON CONFLICT ({conflict_column})
+            DO UPDATE SET {update_cols}
+            RETURNING *;
+        """
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(sql, *values)
+            return [dict(r) for r in rows]
+
     # -------------------------
     async def delete(self, table: str, filters: dict):
         """Delete records matching filters"""
         try:
-            where_clause = " AND ".join(f"{k} = ${i+1}" for i, k in enumerate(filters.keys()))
+            where_clause = " AND ".join(
+                f"{k} = ${i+1}" for i, k in enumerate(filters.keys())
+            )
             sql = f"DELETE FROM {table} WHERE {where_clause} RETURNING *;"
             params = list(filters.values())
-    
+
             async with self.pool.acquire() as conn:
                 return await conn.fetch(sql, *params)
         except Exception as e:
             Config.logger.error(f"Error during delete from {table}: {e}")
             raise
-        
+
     # ----------------------------------------------------
     # ASYNC FUNCTION CALLS
     # ----------------------------------------------------
@@ -188,10 +253,10 @@ class JobDatabase:
         try:
             params = params or []
             fetch_type = fetch_type or self.FETCH  # Default to FETCH
-            
+
             placeholders = ", ".join(f"${i+1}" for i in range(len(params)))
             sql = f"SELECT * FROM {fn}({placeholders});"
-    
+
             async with self.pool.acquire() as conn:
                 if fetch_type == self.FETCHVAL:
                     return await conn.fetchval(sql, *params)

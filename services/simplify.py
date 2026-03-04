@@ -137,7 +137,7 @@ class Simplify:
             "name": company.lower()
         }
         DB = await JobDatabase.create()
-        compnay_dict = await DB.upsert(table="company",data = compnay_dict)  # Upsert company and get the record with ID
+        compnay_dict = await DB.upsert(table="company",data = compnay_dict,conflict_column="name")  # Upsert company and get the record with ID
         if not compnay_dict:
             compnay_dict = await DB.selectOne(table="company", filters={"name": company.lower()})
         

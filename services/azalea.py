@@ -2,10 +2,11 @@
 azalea.py - Refactored main orchestrator
 """
 import json, os,emoji
+import uuid
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from services.Remote import RemoteOKHelper
-from services.companies import Company, Job
+from services.companies import Job
 from services.db import JobDatabase
 from services.config import Config
 from services.jsearch import JSearch
@@ -15,7 +16,7 @@ from services.constants import (
     PositionType, DatePosted, JobSource,
     StatsKeys, FilePaths, LogMessages
 )
-
+import uuid
 
 
 
@@ -29,7 +30,6 @@ class JobStats:
     total_fetched: int = 0
     unique_jobs: int = 0
     inserted: int = 0
-    with_sponsorship: int = 0
     errors: int = 0
     position_type: Optional[str] = None
 
@@ -42,7 +42,6 @@ class JobStats:
             StatsKeys.TOTAL_FETCHED: self.total_fetched,
             StatsKeys.UNIQUE_JOBS: self.unique_jobs,
             StatsKeys.INSERTED: self.inserted,
-            StatsKeys.WITH_SPONSORSHIP: self.with_sponsorship,
             StatsKeys.ERRORS: self.errors,
             StatsKeys.POSITION_TYPE: self.position_type,
         }
@@ -170,7 +169,7 @@ class Azalea:
         Config.logger.info(f"  • Total fetched: {self.stats.total_fetched} jobs")
         Config.logger.info(f"  • After deduplication: {self.stats.unique_jobs} jobs")
         Config.logger.info(f"  • Inserted to DB: {self.stats.inserted} jobs")
-        Config.logger.info(f"  • With sponsorship: {self.stats.with_sponsorship} jobs")
+
         Config.logger.info("=" * 60)
 
     def build_discord_message(self, mention_user_id: Optional[str] = None) -> str:
@@ -186,7 +185,6 @@ class Azalea:
             f"  • Total fetched: {self.stats.total_fetched} jobs",
             f"  • After deduplication: {self.stats.unique_jobs} jobs",
             f"  • Inserted to DB: {self.stats.inserted} jobs",
-            f"  • With sponsorship: {self.stats.with_sponsorship} jobs",
             "",
             "✅ Completed successfully!"
         ])
@@ -223,7 +221,15 @@ class Azalea:
                 Config.save_to_json(unique_jobs)
             
             # Step 5``: Save to database
-           # self.save_to_database(unique_jobs)
+            self._log_section("SAVING TO DATABASE")
+            db = await JobDatabase().create()
+            inserted_count = 0
+            list_jobs = []
+            for job in unique_jobs:
+                db_job = Job.to_dict(job)
+                db_job["company"] =job.company  
+                list_jobs.append(db_job)
+            inserted_count = await db.bulk_upsert("job_list", list_jobs, conflict_column="id")
             
             # Print summary
             self.print_summary()
