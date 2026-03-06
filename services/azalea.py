@@ -79,7 +79,7 @@ class Azalea:
     def _init_helpers(self):
         """Initialize all helper classes for job sources"""
         # Simplify is always available
-        #self.helpers[JobSource.SIMPLIFY] = Simplify()
+        self.helpers[JobSource.SIMPLIFY] = Simplify()
         Config.logger.info(
             f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized"
         )
@@ -102,7 +102,7 @@ class Azalea:
         #        f"✓ {JobSource.REMOTEOK.value.capitalize()} helper initialized "
         #    )
         # Placeholder for future RemoteOK helper
-        self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
+        #self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
 
     def _log_section(self, title: str):
         """Log a section divider"""
@@ -289,7 +289,7 @@ def main():
         message = orchestrator.build_discord_message(
             mention_user_id="755872891601551511"
         )
-        notify_discord(message)
+        #notify_discord(message)
 
     except Exception as e:
         err_msg = f"❌ Libra scraper failed:\n```{str(e)}```"
