@@ -178,8 +178,6 @@ class JSearch:
             "salary_range": self._extract_salary(job),
             "source": "jsearch",
             "tags": job.get("job_highlights"),
-            "date_posted": job.get("job_posted_at_datetime_utc"),
-
         }
    
         return Job.from_dict(refined_job, company=company.get("id"))
@@ -188,7 +186,7 @@ class JSearch:
         """Extract salary range from job data"""
         min_sal = job.get("job_min_salary")
         max_sal = job.get("job_max_salary")
-        return (min_sal, max_sal) if min_sal and max_sal else None
+        return[min_sal, max_sal] if min_sal and max_sal else None
 
  
 

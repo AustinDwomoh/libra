@@ -185,7 +185,7 @@ class JobDatabase:
         # DELETE
 
     # -------------------------
-    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str):
+    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str=None):
         if not rows:
             return []
 
@@ -196,11 +196,26 @@ class JobDatabase:
         values = []
         placeholder_groups = []
         param_index = 1
-
+       
+        on_conflict = f"ON CONFLICT DO NOTHING"
+        if conflict_column:
+            update_fields = [k for k in columns if k != conflict_column]
+            if update_fields:
+                update_cols = ", ".join(
+                    f"{k} = EXCLUDED.{k}" for k in update_fields
+                )
+                on_conflict = (
+                    f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}"
+                )
+        
         for row in rows:
             group = []
             for col in columns:
-                values.append(row[col])
+                if isinstance(row[col], (dict, list)):
+                    value = json.dumps(row[col])
+                else:
+                    value = row[col]
+                values.append(value)
                 group.append(f"${param_index}")
                 param_index += 1
             placeholder_groups.append(f"({', '.join(group)})")
@@ -215,8 +230,7 @@ class JobDatabase:
         sql = f"""
             INSERT INTO {table} ({cols})
             VALUES {placeholders}
-            ON CONFLICT ({conflict_column})
-            DO UPDATE SET {update_cols}
+            {on_conflict}
             RETURNING *;
         """
 

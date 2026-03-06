@@ -48,8 +48,7 @@ class Job:
     company: uuid.UUID = None  # This should be the company ID, not the full object, to avoid circular references
     apply_url: Optional[str] = None
     role_type: str = "other"
-    pay_range: Optional[tuple] = None
-    date_posted: Optional[str] = None
+    pay_range: Optional[list] = None
     source: str = "unknown"
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -63,16 +62,20 @@ class Job:
 
     def is_valid(self) -> bool:
         return bool(
+            
             self.title
             and isinstance(self.company, uuid.UUID)
             and self.location
             and self.apply_url or  self.description
-        )
+
+        ) 
 
     def get_salary_info(self) -> str:
         if not self.pay_range:
             return "Not specified"
-        min_sal, max_sal = self.pay_range
+        min_sal, max_sal = self.pay_range[0], self.pay_range[1]
+        if min_sal is None and max_sal is None:
+            return "Not specified"
         return f"${min_sal:,} - ${max_sal:,}"
 
 
@@ -84,7 +87,7 @@ class Job:
         """
         salary_range = job.get("salary_range")
         pay_range = (
-            tuple(salary_range)
+            [salary_range[0], salary_range[1]]
             if isinstance(salary_range, (tuple, list)) and len(salary_range) == 2
             else None
         )
@@ -98,7 +101,6 @@ class Job:
             apply_url=job.get("link") or job.get("apply_url"),
             role_type=job.get("role_type", "other"),
             pay_range=pay_range,
-            date_posted=job.get("date_posted"),
             source=job.get("source", "unknown"),
             tags=job.get("tags", {}),
         )
@@ -114,7 +116,6 @@ class Job:
             "apply_url": job.apply_url,
             "role_type": job.role_type,
             "pay_range": job.pay_range,
-            "date_posted": job.date_posted,
             "source": job.source,
             "tags": job.tags,
         }
@@ -125,6 +126,13 @@ class Job:
         Convert a Job instance into a dictionary suitable for database insertion.
         This may involve converting certain fields (e.g. company ID to string) and ensuring all required fields are present.
         """
+        k = job.tags
+        if isinstance(k, list):
+            job.tags = {f"tag_{i}": tag for i, tag in enumerate(k)}
+        elif isinstance(k, dict):
+            k = job.tags
+        else:
+            k = {}
         return {
             "title": job.title,
             "company": job.company,  # Assuming this is already the company ID (UUID)
@@ -134,9 +142,9 @@ class Job:
             "apply_url": job.apply_url,
             "role_type": job.role_type,
             "pay_range": job.pay_range,
-            "date_posted": datetime.datetime.strptime(job.date_posted, "%Y-%m-%d") if job.date_posted else None,
             "source": job.source,
-            "tags": dict(job.tags),
+            "tags": k, 
+            "identifier": job.__hash__(),  # Add a hash of the job for deduplication purposes
         }
     
 
@@ -151,4 +159,5 @@ class Job:
         )
     
     def __hash__(self):
+        """Generate a hash based on the job's title, company, location, and apply_url for deduplication purposes"""
         return hash((self.title, self.company, self.location, self.apply_url))

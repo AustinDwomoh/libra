@@ -152,7 +152,7 @@ class Simplify:
             "salary_range": None,  # Simplify doesn't provide salary info
             "source": "simplify",
             "tags": [],
-            "date_posted": None,
+
 
         }
         return Job.from_dict(refined_job, company=compnay_dict.get("id"))

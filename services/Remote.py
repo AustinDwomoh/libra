@@ -41,8 +41,8 @@ class RemoteOKHelper:
                 json.dump(jobs, f, indent=2)
             # Filter based on position type
             relevant_jobs = [
-               await self._map_job(job) for job in jobs           ]
-          # if self._is_relevant_job(job, position_type)
+               await self._map_job(job) for job in jobs if job is not None    ]
+    
             Config.logger.info(f"RemoteOK: Found {len(relevant_jobs)} relevant jobs")
             return relevant_jobs
            
@@ -89,7 +89,7 @@ class RemoteOKHelper:
        
 
         refined_job = {
-            "title": job.get("job_title", "Unknown").lower(),
+            "title": job.get("position").lower(),
             "location": job.get("location") or Defaults.LOCATION_NOT_SPECIFIED,
             "is_remote": job.get("job_is_remote", False),
             "description": job.get("description", ""),
@@ -98,11 +98,15 @@ class RemoteOKHelper:
             "salary_range": f"{job.get('salary_min', 'N/A')} - {job.get('salary_max', 'N/A')} $",
             "source": "remoteok",
             "tags": job.get("tags", []),
-            "date_posted": job.get("date"),
 
         }
-   
-        return Job.from_dict(refined_job, company=company.get("id"))
+        #print(f"Mapped job: {refined_job}")
+        try:
+            job = Job.from_dict(refined_job, company=company.get("id"))
+        except ValueError as e:
+            Config.logger.error(f"Error mapping job: {e}")
+            return None#return empty to avoid breaking the loop, we can filter out invalid jobs later
+        return job  
 
 if __name__ == "__main__":
     helper = RemoteOKHelper()
