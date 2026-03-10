@@ -1,6 +1,8 @@
 
 import json
 import os,logging
+import re
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from typing import List, Dict
 
@@ -37,3 +39,29 @@ class Config:
         except Exception as e:
             cls.logger.warning(f"Could not save jobs to JSON: {e}")
            
+    @staticmethod
+    def strip_html(text: str) -> str:
+        return BeautifulSoup(text, "html.parser").get_text(separator=" ").strip()
+
+    @staticmethod
+    def clean_ws(text: str) -> str:
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def is_missing(value) -> bool:
+        """True if a field value should be treated as unfilled."""
+        if value is None:
+            return True
+        if isinstance(value, str) and value.strip() in ("", "Unknown", "other", "unknown"):
+            return True
+        if isinstance(value, list) and (len(value) == 0 or all(v is None for v in value)):
+            return True
+        if isinstance(value, dict) and len(value) == 0:
+            return True
+        return False
+
+
+    @staticmethod
+    def _norm_amount(s: str) -> float:
+        s = s.replace(",", "").strip()
+        return float(s[:-1]) * 1000 if s.lower().endswith("k") else float(s)

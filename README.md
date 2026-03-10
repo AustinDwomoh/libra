@@ -5,7 +5,7 @@ This file is structured for readability and easy consumption by static doc gener
 
 # Libra
 
-> Job scraping and sponsorship detection API
+> Job scraping and sponsorship detection API(v2)
 
 <p align="center">
   <img src="./logo.svg" alt="Libra logo" width="240" />
@@ -21,148 +21,222 @@ This README is written in a Docify-friendly layout and includes a quickstart, AP
 
 ---
 
-## Quickstart (development)
-
-1. Create/activate a Python virtual environment (or use the included `libra/` venv):
-
-```powershell
-python -m venv venv
-.\venv\Scripts\Activate.ps1
-```
-
-2. Install dependencies:
-
-```powershell
-pip install -r requirements.txt
-```
-
-3. Create a `.env` file in the repository root with your DB settings (example below).
-
-4. Run the API (development mode with auto-reload):
-
-```powershell
-python main.py
-```
-
-Open interactive docs:
-- Swagger UI: `http://localhost:5000/docs`
-- ReDoc: `http://localhost:5000/redoc`
+## Current State
+- This is for the v2 only 
+- Swicthing from the dependency on the CSV from the USCIS to using the description from the apply links
+- The other issues is understanding the and extrating data from the description
+  > The options were regex and LLM extractions but am against having to keep paying for such a service in this low stakes project. Will research and develop somethign better but then I will build without the extractions and get version two up and working
 
 ---
 
-## Environment example (.env)
+## API Reference
 
-```
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=libra
-DB_USER=postgres
-DB_PASSWORD=secret
-```
-
----
-
-## API Reference (examples)
-
-Base URL: `http://localhost:5000`
+Base URL: `http://libra.austindwomoh.xyz`
 
 ### GET /
+
 Returns API metadata and available endpoints.
 
 Response (200):
 
 ```json
 {
-  "api": {"name": "Libra", "version": "1.0"},
-  "endpoints": {"GET /jobs": "Retrieve jobs"}
+  "api": {
+    "name": "Libra",
+    "version": "1.0",
+    "description": "Libra - Job Scraping API powered by FastAPI",
+    "author": "Austin Dwomoh",
+    "base_url": "/"
+  },
+  "endpoints": {
+    "GET /": "API documentation and metadata",
+    "GET /jobs": "Retrieve jobs with optional query parameters: limit(?limit=10)",
+    "GET /company/{company_name}": "Get jobs by company name with optional limit",
+    "GET /search/{keyword}": "Search jobs by keyword in title or company",
+    "GET /sponsor": "Get all jobs with likely sponsorship"
+  },
+  "notes": [
+    "All data is read-only and updated by background scrapers.",
+    "Query parameters are case-insensitive where applicable.",
+    "Use /docs for interactive Swagger UI and /redoc for ReDoc documentation."
+  ]
 }
 ```
 
 ### GET /jobs
+
 Query parameters:
-- `company` (optional): case-insensitive partial match on company name
-- `sponsorship` (optional): exact match on sponsorship field
+
 - `limit` (optional): integer limit on returned rows
 
 Example:
-`GET /jobs?company=google&limit=10`
+`GET /jobs?&limit=2`
 
 Response (200):
 
 ```json
 {
   "success": true,
-  "count": 2,
+  "params": {
+    "limit": 4
+  },
   "jobs": [
-    {"id": "...", "company": "Google", "title": "SWE Intern", "source": "jsearch", "sponsorship": "Likely sponsorship"}
+    {
+      "id": "dcf8edc2-05b4-456c-b24e-b27b9ee20ee8",
+      "company": "spectrum control",
+      "title": "Engineering Intern/Co-op",
+      "location": "Philadelphia, PA",
+      "link": "https://spectrumcontrol.wd1.myworkdayjobs.com/spectrumcontrol/job/Philadelphia-PA/Engineering-Co-Op_JR101305?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "No record found",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-03-10T11:02:53.371494",
+      "updated_at": "2026-03-10T11:02:53.371494"
+    },
+    {
+      "id": "d0c43e5b-3bf6-4031-82d4-f35f702d94de",
+      "company": "amentum",
+      "title": "Software Programmer Intern",
+      "location": "Detroit, MI",
+      "link": "https://pae.wd1.myworkdayjobs.com/en-US/amentum_careers/job/US-MI-Detroit/Software-Programmer-Intern_R0156070?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "No record found",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-03-10T11:02:53.371494",
+      "updated_at": "2026-03-10T11:02:53.371494"
+    }
   ]
 }
 ```
 
-### GET /jobs/company/{company_name}
-Return jobs filtered by company name (exact match path param). Example:
-`GET /jobs/company/Google`
+### GET /ompany/{company_name}
 
-### GET /jobs/search/{keyword}
+Return jobs filtered by company name (exact match path param). Example:
+`GET /company/walmart`
+
+> company name must be lower case
+
+```json
+{
+  "success": true,
+  "params": {
+    "company_name": "walmart",
+    "limit": null
+  },
+  "jobs": [
+    {
+      "id": "9a55263c-2bce-4ac4-b565-945e01c235af",
+      "company": "walmart",
+      "title": "Software Engineer 2",
+      "location": "Bentonville, ARSunnyvale, CA",
+      "link": "https://walmart.wd5.myworkdayjobs.com/WalmartExternal/job/Bentonville-AR/XMLNAME-2026-Summer-Intern--Software-Engineering-II--Bentonville-_R-2354856?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "No record found",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-01-08T14:31:12.947092",
+      "updated_at": "2026-01-28T04:21:08.332309"
+    },
+    {
+      "id": "4360bd4c-e4c0-4c0a-9b51-334f6f2fc365",
+      "company": "walmart",
+      "title": "Intern Software Engineer 2 - Software Engineer",
+      "location": "Sunnyvale, CA",
+      "link": "https://walmart.wd5.myworkdayjobs.com/WalmartExternal/job/Sunnyvale-CA/XMLNAME-2026-Summer-Intern--Software-Engineer-II_R-2349390?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "No record found",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-01-06T20:54:01.542547",
+      "updated_at": "2026-01-06T23:19:06.082396"
+    }
+  ]
+}
+```
+
+### GET /search/{keyword}
+
 Full-text-ish search across title and company.
 
-### GET /jobs/sponsor
+```json
+{
+  "success": true,
+  "params": {
+    "keyword": "walmart"
+  },
+  "jobs": [
+    {
+      "id": "9a55263c-2bce-4ac4-b565-945e01c235af",
+      "company": "walmart",
+      "title": "Software Engineer 2",
+      "location": "Bentonville, ARSunnyvale, CA",
+      "link": "https://walmart.wd5.myworkdayjobs.com/WalmartExternal/job/Bentonville-AR/XMLNAME-2026-Summer-Intern--Software-Engineering-II--Bentonville-_R-2354856?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "No record found",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-01-08T14:31:12.947092",
+      "updated_at": "2026-01-28T04:21:08.332309"
+    }
+  ]
+}
+```
+
+### GET /sponsor
+
 Return jobs that are likely to offer sponsorship.
 
----
-
-## File-by-file explanation
-
-This section explains the purpose of each top-level file and important modules. Use this as a quick code map.
-
-- `main.py` — FastAPI application entrypoint.
-  - Defines endpoints: `/`, `/jobs`, `/jobs/company/{company_name}`, `/jobs/search/{keyword}`, `/jobs/sponsor`.
-  - Configures CORS and exception handlers.
-  - Contains a small `run()` helper that uses `uvicorn.run("main:app", ...)` for dev reload.
-
-- `requirements.txt` — pinned Python dependencies. Install with `pip install -r requirements.txt`.
-
-- `logo.svg` — project logo referenced by this README.
-
-- `libra/` — virtual environment directory (if present). It contains Python interpreter and installed packages. You can either use it or create your own venv.
-
-- `services/` — core service modules:
-  - `services/db_manager.py` — `JobDatabase` context manager. Handles connection, queries, and helper read methods used by API endpoints.
-  - `services/azalea.py` — scraping logic (fetches README from external repo, parses tables via BeautifulSoup, extracts job rows).
-  - `services/assist.py` or `services/sponsor.py` — sponsorship matching logic (loads Employer CSVs and uses fuzzy matching to tag jobs).
-  - `services/jsearch.py`, `services/simplify.py` — auxiliary scrapers / parsers for different sources.
-
-- `resources/` — static assets and DB schema:
-  - `schema.sql` — SQL to create `jobs` table and triggers for timestamps.
-  - `Employer_info.csv` — H1-B employer dataset (used for sponsorship matching).
-
-- `cache/` — local cached scraper outputs (such as `scraped_jobs.json`) to speed up development.
-
----
-
-## How the pieces work together (flow)
-
-1. Scrapers in `services/` fetch remote README/table sources and extract job rows.
-2. Extracted rows are cleaned and passed to `services/assist.py` (sponsorship matcher) which returns a `sponsorship` tag per job.
-3. Jobs are stored (or read) by `services/db_manager.JobDatabase` into a PostgreSQL `jobs` table.
-4. `main.py` exposes the read-only API endpoints that query `JobDatabase` and return JSON responses.
-
----
-
-## Troubleshooting & notes
-
-- If you see the uvicorn reload warning, ensure `uvicorn.run` is called with an import string: `uvicorn.run("main:app", reload=True)`.
-- If `psycopg2` is missing, install via `pip install psycopg2-binary` (or `psycopg2` if you prefer compiled wheel).
-- Use `.env` or environment variables to configure DB connection; do not commit secrets.
+```json
+{
+  "success": true,
+  "params": {
+    "sponsorship": "likely sponsorship"
+  },
+  "jobs": [
+    {
+      "id": "ed0b2104-93ae-42c2-a221-84ed553f0fbb",
+      "company": "copart",
+      "title": "Software Engineering Intern 🎓",
+      "location": "Dallas, TX",
+      "link": "https://copart.wd12.myworkdayjobs.com/copart/job/Dallas-TX---Headquarters/Software-Engineering-Intern_JR107699?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "Likely sponsorship",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-03-10T11:02:53.371494",
+      "updated_at": "2026-03-10T11:02:53.371494"
+    },
+    {
+      "id": "ad024357-b96b-4ba9-a56f-4ed1fda9c3b2",
+      "company": "copart",
+      "title": "Software Engineer Intern",
+      "location": "Dallas, TX",
+      "link": "https://copart.wd12.myworkdayjobs.com/copart/job/Dallas-TX---Headquarters/Software-Engineering-Intern_JR107700?utm_source=Simplify&ref=Simplify",
+      "sponsorship": "Likely sponsorship",
+      "source": "simplify",
+      "remote": false,
+      "date_posted": null,
+      "description": null,
+      "tags": [],
+      "created_at": "2026-03-10T11:02:53.371494",
+      "updated_at": "2026-03-10T11:02:53.371494"
+    }
+  ]
+}
+```
 
 ---
-
-## Contributing
-
-Small notes on developing locally:
-- Use the `cache/` JSON files to avoid re-scraping during development.
-- Run unit tests (if present) with `pytest`.
-
----
-
-Generated: 2025-10-09

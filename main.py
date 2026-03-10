@@ -41,9 +41,9 @@ def home():
         "endpoints": {
             "GET /": "API documentation and metadata",
             "GET /jobs": "Retrieve jobs with optional query parameters: limit(?limit=10)",
-            "GET /jobs/company/{company_name}": "Get jobs by company name with optional limit",
-            "GET /jobs/search/{keyword}": "Search jobs by keyword in title or company",
-            "GET /jobs/sponsor": "Get all jobs with likely sponsorship"
+            "GET /company/{company_name}": "Get jobs by company name with optional limit",
+            "GET /search/{keyword}": "Search jobs by keyword in title or company",
+            "GET /sponsor": "Get all jobs with likely sponsorship"
         },
         "notes": [
             "All data is read-only and updated by background scrapers.",
@@ -76,7 +76,7 @@ def get_jobs(
     }
 
 
-@app.get("/jobs/company/{company_name}")
+@app.get("/company/{company_name}")
 def get_jobs_by_company(
     company_name: str,
     limit: Optional[int] = Query(None, description="Limit number of results")
@@ -98,7 +98,7 @@ def get_jobs_by_company(
     }
 
 
-@app.get("/jobs/search/{keyword}")
+@app.get("/search/{keyword}")
 def search_jobs(keyword: str):
     """Search jobs by keyword in title or company"""
     with JobDatabase(auto_setup=False) as db:
@@ -113,7 +113,7 @@ def search_jobs(keyword: str):
     }
 
 
-@app.get("/jobs/sponsor")
+@app.get("/sponsor")
 def get_jobs_by_sponsorship():
     """Get all jobs by sponsorship status"""
     with JobDatabase(auto_setup=False) as db:
