@@ -133,45 +133,9 @@ class GroqProvider(LLMProvider):
         return response.choices[0].message.content
 
 
-# ─── Gemini ────────────────────────────────────────────────────────────────────
-
-class GeminiProvider(LLMProvider):
-    """
-    Google Gemini via google-genai SDK.
-    Free tier: 1,500 req/day.
-    Get key: https://aistudio.google.com/app/apikey
-
-    pip install google-genai
-    GEMINI_KEY=your_key
-    """
-
-    def __init__(self, model: str = "gemini-2.5-flash-preview-04-17"):
-        self.model = model
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            try:
-                from google import genai
-            except ImportError:
-                raise ImportError("Run: pip install google-genai")
-            api_key = os.getenv("GEMINI_KEY")
-            if not api_key:
-                raise ValueError("Set GEMINI_KEY environment variable")
-            self._client = genai.Client(api_key=api_key)
-        return self._client
-
-    def complete(self, prompt: str) -> str:
-        client = self._get_client()
-        response = client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-        )
-        return response.text.strip()
 
 
 # ─── Phi-3 (local) ─────────────────────────────────────────────────────────────
-
 class Phi3Provider(LLMProvider):
     """
     Local Microsoft Phi-3-mini via Hugging Face Transformers.
@@ -187,9 +151,9 @@ class Phi3Provider(LLMProvider):
             model_id,
             device_map="cuda",
             torch_dtype="auto",
-            trust_remote_code=True,
+            trust_remote_code=False,  # use transformers' built-in Phi-3 support
         )
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
         self._pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
         self._gen_args = {
             "max_new_tokens": 500,

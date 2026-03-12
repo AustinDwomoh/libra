@@ -27,7 +27,7 @@ import re, json, logging, time, uuid, requests
 from dataclasses import dataclass, field as dc_field
 from typing import Optional
 from bs4 import BeautifulSoup
-from services.llm import GeminiProvider, GroqProvider, LLMProvider,Phi3Provider
+from services.llm import  GroqProvider, LLMProvider,Phi3Provider
 from services.config import Config
 
 
@@ -181,7 +181,8 @@ def scrape_apply_url(url: str) -> Optional[str]:
             text = page.inner_text("body")
             browser.close()
             Config.logger.info("Scraped with Playwright")
-            return Config.clean_ws(text)[:5000]
+            Config.logger.warning("Playwright scrape is best effort and may fail on some sites. Always verify results.")
+            return Config.clean_ws(text)[:10000]
 
     except ImportError:
         Config.logger.warning("Playwright not installed — run: pip install playwright && playwright install chromium")
@@ -195,7 +196,8 @@ def scrape_apply_url(url: str) -> Optional[str]:
         for tag in soup(["nav", "footer", "script", "style", "header"]):
             tag.decompose()
         Config.logger.info("Scraped with requests (static only)")
-        return Config.clean_ws(soup.get_text(separator=" "))[:5000]
+        Config.logger.warning("Requests scrape is a fallback and may miss content on JS-heavy sites.")
+        return Config.clean_ws(soup.get_text(separator=" "))[:10000]
     except Exception as e:
         Config.logger.warning(f"Requests scrape also failed: {e}")
         return None
@@ -240,21 +242,8 @@ def enrich_job(
     use_llm: bool = True,
     scrape_if_empty: bool = True,
 ) -> dict:
-    """
-    Enrich a Job instance in-place with missing details.
-
-    Args:
-        job:             A Job dataclass instance
-        provider:        LLMProvider instance (GroqProvider or GeminiProvider).
-                         Defaults to GroqProvider if not specified.
-        use_llm:         Whether to use LLM as fallback
-        scrape_if_empty: Whether to scrape apply_url if description is thin
-
-    Returns:
-        meta dict: {"stages_run": [...], "fields_filled": [...]}
-    """
     if use_llm and provider is None:
-        provider = GroqProvider()  # default to Groq
+        provider = GroqProvider()
 
     meta = {"stages_run": [], "fields_filled": [], "provider": provider.__class__.__name__ if provider else None}
     fields_to_check = ["pay_range", "is_remote", "role_type", "location", "tags", "description"]
@@ -285,22 +274,42 @@ def enrich_job(
         filled = _apply_to_job(job, extracted)
         meta["fields_filled"].extend(f"{f} (llm)" for f in filled)
 
-    # ── Stage 3: Scrape apply_url + LLM ──
+    # ── Stage 3: Scrape apply_url ──
     missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
     if missing and scrape_if_empty and job.apply_url:
         Config.logger.info(f"Scraping apply URL for: {missing}")
         meta["stages_run"].append("scrape")
         scraped = scrape_apply_url(job.apply_url)
 
-        if scraped and use_llm and provider:
-            meta["stages_run"].append("llm_scraped")
-            extracted = provider.extract(job, scraped)
-            filled = _apply_to_job(job, extracted)
-            meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
+        if scraped:
+            # ── Stage 3a: Regex on scraped text (catches pay buried at bottom) ──
+            meta["stages_run"].append("regex_scraped")
+            if Config.is_missing(job.pay_range):
+                pay = _regex_pay(scraped)
+                if pay:
+                    job.pay_range = pay
+                    meta["fields_filled"].append("pay_range (regex+scrape)")
+            if Config.is_missing(job.is_remote):
+                remote = _regex_remote(scraped)
+                if remote is not None:
+                    job.is_remote = remote
+                    meta["fields_filled"].append("is_remote (regex+scrape)")
+            if Config.is_missing(job.role_type):
+                role = _regex_role_type(scraped)
+                if role:
+                    job.role_type = role
+                    meta["fields_filled"].append("role_type (regex+scrape)")
+
+            # ── Stage 3b: LLM on scraped text ──
+            missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
+            if missing and use_llm and provider:
+                meta["stages_run"].append("llm_scraped")
+                extracted = provider.extract(job, scraped)
+                filled = _apply_to_job(job, extracted)
+                meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
 
     Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
     return meta
-
 
 def enrich_jobs_batch(
     jobs: list["Job"],
@@ -343,15 +352,15 @@ if __name__ == "__main__":
         source: str = "unknown"
         tags: dict = dc_field(default_factory=dict)
 
-    company_id = uuid.UUID("37615c6d-777a-4cc4-8319-8a2b64fec7c6")
+    company_id = uuid.UUID("6c8333ed-7275-4565-9392-81a9aa46aa45")
 
     job1 = Job(
-        title="computer science bachelor%27s intern",
+        title="machine learning intern/co-op",
         company=company_id,
-        location="San Diego, CA",
+        location="",
         is_remote=False,
         description="",
-        apply_url="https://kp.taleo.net/careersection/external/jobdetail.ftl?job=1406519&utm_source=Simplify&ref=Simplify",
+        apply_url="https://job-boards.greenhouse.io/fspco-op012325/jobs/8427924002?utm_source=Simplify&ref=Simplify",
         role_type="other",
         pay_range=None,
         source="simplify",
@@ -361,8 +370,8 @@ if __name__ == "__main__":
     print("=== Before ===")
     print(job1)
 
-    # Swap provider here — GroqProvider() or GeminiProvider()
-    meta = enrich_job(job1, provider=Phi3Provider(), scrape_if_empty=True)
+    # Swap provider here —  or GeminiProvider()
+    meta = enrich_job(job1, provider=GroqProvider(), scrape_if_empty=True)
 
     print("\n=== After ===")
     print(job1)
