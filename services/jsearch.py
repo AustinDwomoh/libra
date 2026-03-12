@@ -4,7 +4,7 @@ jsearch.py - Refactored with constants
 import asyncio
 from typing import List, Dict
 import requests,json,time
-from services.companies import Job
+from services.models import Job
 from services.config import Config
 from services.constants import (PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults)
 from services.db import JobDatabase
@@ -158,7 +158,7 @@ class JSearch:
     async def _map_job(self, job: Dict) -> Job:
         """Map JSearch response to standard job format"""
         compnay_dict = {
-            "name": job.get("employer_name").lower(),
+            "name": (job.get("employer_name") or "unknown").lower(),
             "company_url": job.get("employer_website")
         }
         DB = await JobDatabase.create()
@@ -223,10 +223,9 @@ class JSearch:
             if i < len(queries) - 1:
                 Config.logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
                 await asyncio.sleep(rate_limit_delay)
-        print(f"Total jobs before deduplication: {len(all_jobs)}")
+        Config.logger.info(f"JSearch: {len(all_jobs)} jobs before deduplication")
 
-        unique_jobs = set(all_jobs)  # Rely on Job's __hash__ and __eq__ for deduplication
-        print(f"Total unique jobs after deduplication: {len(unique_jobs)}")
+        unique_jobs = list(set(all_jobs))  # Rely on Job's __hash__ and __eq__ for deduplication
         Config.logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
         return unique_jobs
 
@@ -277,7 +276,7 @@ async def main():
     jobs = await jsearch_helper.fetch_jobs( position_type=PositionType.INTERN, date_posted=DatePosted.WEEK )
     jobs = [job.to_dict(job) for job in jobs]  # Convert Job objects to dicts for JSON serialization
     print(f"Total unique jobs fetched: {len(jobs)}")
-    with open('jsearch_jobs.json', 'w', encoding='utf-8') as f:
+    with open(FilePaths.JSEARCH_JOBS, 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)
     Config.logger.info(f"Total jobs fetched: {len(jobs)}")
 

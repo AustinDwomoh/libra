@@ -77,8 +77,11 @@ class FilePaths:
     """Default file paths"""
 
     SCRAPED_JOBS_JSON: Final = "resources/scraped_jobs.json"
-    JSEARCH_RAW_JOBS: Final = "jsearch_raw_jobs.json"
-    JSEARCH_JOBS: Final = "jsearch_jobs.json"
+    JSEARCH_RAW_JOBS: Final = "resources/jsearch_raw_jobs.json"
+    JSEARCH_JOBS: Final = "resources/jsearch_jobs.json"
+    REMOTEOK_RAW: Final = "resources/remoteok_raw.json"
+    REMOTEOK_BEFORE_JOBS: Final = "resources/remoteok_before_jobs.json"
+    REMOTEOK_INTERNSHIPS: Final = "resources/remoteok_internships.json"
     SPONSOR_CACHE: Final = "cache/sponsors.json"
 
 

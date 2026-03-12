@@ -2,13 +2,10 @@
 azalea.py - Refactored main orchestrator
 """
 
-import datetime
-import json, os, emoji
-import uuid
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 from services.Remote import RemoteOKHelper
-from services.companies import Job
+from services.models import Job
 from services.db import JobDatabase
 from services.config import Config
 from services.jsearch import JSearch
@@ -22,7 +19,6 @@ from services.constants import (
     FilePaths,
     LogMessages,
 )
-import uuid
 
 
 @dataclass
@@ -85,24 +81,23 @@ class Azalea:
         )
 
         # JSearch requires API key
-        #if Config.J_SEARCH_API_KEY:
-        #    self.helpers[JobSource.JSEARCH] = JSearch()
-        #    Config.logger.info(
-        #        f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized"
-        #    )
-        #else:
-        #    Config.logger.warning(
-        #        f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled."
-        #    )
-#
-        #if Config.REMOTEOK:
-        #    # Placeholder for future RemoteOK helper
-        #    self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
-        #    Config.logger.info(
-        #        f"✓ {JobSource.REMOTEOK.value.capitalize()} helper initialized "
-        #    )
+        if Config.J_SEARCH_API_KEY:
+            self.helpers[JobSource.JSEARCH] = JSearch()
+            Config.logger.info(
+                f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized"
+            )
+        else:
+            Config.logger.warning(
+                f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled."
+            )
+        if Config.REMOTEOK:
+            # Placeholder for future RemoteOK helper
+            self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
+            Config.logger.info(
+                f"✓ {JobSource.REMOTEOK.value.capitalize()} helper initialized "
+            )
         # Placeholder for future RemoteOK helper
-        #self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
+
 
     def _log_section(self, title: str):
         """Log a section divider"""
@@ -245,10 +240,11 @@ class Azalea:
                 Config.logger.warning("No jobs found to process")
                 return self.stats.to_dict()
 
-            # Step 2: Deduplicate
+            # Step 2: Deduplicate — filter None first so set() doesn't swallow bad entries
             self._log_section("DEDUPLICATING JOBS")
-            unique_jobs = list(set(all_jobs))
-            unique_jobs = [job for job in unique_jobs if job is not None and job.is_valid()]
+            valid_jobs = [job for job in all_jobs if job is not None]
+            unique_jobs = list(set(valid_jobs))
+            unique_jobs = [job for job in unique_jobs if job.is_valid()]
             self.stats.unique_jobs = len(unique_jobs)
             self.jobs = unique_jobs
             Config.logger.info(LogMessages.deduplication_result(len(all_jobs), len(unique_jobs)))
@@ -265,8 +261,7 @@ class Azalea:
 
             inserted_count = await db.bulk_upsert("job_list", list_jobs, conflict_column="identifier")
             self.stats.inserted = len(inserted_count)
-            # Print summary
-            print(f"Inserted {len(inserted_count)} new jobs into the database")
+            Config.logger.info(f"Inserted {len(inserted_count)} new jobs into the database")
             self.print_summary()
 
             return self.stats.to_dict()

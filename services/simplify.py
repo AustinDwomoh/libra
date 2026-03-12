@@ -2,17 +2,19 @@
 simplify.py - Refactored with constants and improved structure
 """
 import asyncio
+import json
 from typing import List, Dict, Optional
 import requests
 import emoji
 from bs4 import BeautifulSoup
 from services.config import Config
-from services.companies import Company, Job
+from services.models import Job
 from services.constants import (
     JobSource,
     SimplifyConfig,
     HTTPStatus,
-    Defaults
+    Defaults,
+    FilePaths,
 )
 from services.db import JobDatabase
 
@@ -145,7 +147,7 @@ class Simplify:
         refined_job = {
             "title": self._extract_title(tds).lower(),
             "location": self._extract_location(tds) or Defaults.LOCATION_NOT_SPECIFIED,
-            "is_remote": "",
+            "is_remote": None,
             "description": "",
             "apply_url":  self._extract_link(tds),
             "role_type": "other",  # Simplify doesn't provide role type, so we default to "other"
@@ -253,8 +255,7 @@ if __name__ == "__main__":
     helper = Simplify()
     jobs = asyncio.run(helper.fetch_jobs())
     jobs = [job.to_dict(job) for job in jobs]
-    with open("simplify.json", "w") as f:
-        import json
+    with open(FilePaths.SCRAPED_JOBS_JSON, "w") as f:
         json.dump(jobs, f, indent=2)
     stats = helper.get_stats()
     logger.info(f"Simplify: Stats - {stats}")
