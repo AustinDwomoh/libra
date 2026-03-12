@@ -27,7 +27,7 @@ import re, json, logging, time, uuid, requests
 from dataclasses import dataclass, field as dc_field
 from typing import Optional
 from bs4 import BeautifulSoup
-from services.LLMClasses import GeminiProvider,GroqProvider,LLMProvider
+from services.llm import GeminiProvider, GroqProvider, LLMProvider,Phi3Provider
 from services.config import Config
 
 
@@ -362,7 +362,7 @@ if __name__ == "__main__":
     print(job1)
 
     # Swap provider here — GroqProvider() or GeminiProvider()
-    meta = enrich_job(job1, provider=GroqProvider(), scrape_if_empty=True)
+    meta = enrich_job(job1, provider=Phi3Provider(), scrape_if_empty=True)
 
     print("\n=== After ===")
     print(job1)

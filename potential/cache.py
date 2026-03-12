@@ -1,6 +1,6 @@
 
 from ast import Dict
-from services.companies import Job,Company
+from services.models import Job, Company
 
 
 class Cache:

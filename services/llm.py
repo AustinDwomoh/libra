@@ -1,8 +1,11 @@
 from abc import ABC, abstractmethod
-import json,os,re
+import json, os, re
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 from dotenv import load_dotenv
 from services.config import Config
-from services.companies import Job
+from services.models import Job
+
 load_dotenv()
 
 _LLM_PROMPT = """Extract structured data from this job posting.
@@ -41,8 +44,7 @@ Job posting:
 """
 
 
-
-def _build_prompt(job: "Job", text: str) -> str:
+def _build_prompt(job: Job, text: str) -> str:
     known = {
         "title":     job.title     if not Config.is_missing(job.title)     else None,
         "location":  job.location  if not Config.is_missing(job.location)  else None,
@@ -54,6 +56,7 @@ def _build_prompt(job: "Job", text: str) -> str:
         known=json.dumps({k: v for k, v in known.items() if v is not None}, indent=2),
         text=text[:4000],
     )
+
 
 def _normalise_pay(data: dict) -> dict:
     """Ensure pay_range is always [min, max] format."""
@@ -68,7 +71,7 @@ def _normalise_pay(data: dict) -> dict:
     return data
 
 
-
+# ─── Base Class ────────────────────────────────────────────────────────────────
 
 class LLMProvider(ABC):
     """Base class for LLM providers. Implement `complete(prompt) -> str`."""
@@ -78,7 +81,7 @@ class LLMProvider(ABC):
         """Send prompt, return raw response text."""
         ...
 
-    def extract(self, job, text: str) -> dict:
+    def extract(self, job: Job, text: str) -> dict:
         """Build prompt, call LLM, parse and return extracted fields."""
         prompt = _build_prompt(job, text)
         try:
@@ -91,7 +94,7 @@ class LLMProvider(ABC):
             return {}
 
 
-# ─── Groq Provider ─────────────────────────────────────────────────────────────
+# ─── Groq ──────────────────────────────────────────────────────────────────────
 
 class GroqProvider(LLMProvider):
     """
@@ -125,12 +128,12 @@ class GroqProvider(LLMProvider):
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            response_format={"type": "json_object"},  # guarantees valid JSON
+            response_format={"type": "json_object"},
         )
         return response.choices[0].message.content
 
 
-# ─── Gemini Provider ───────────────────────────────────────────────────────────
+# ─── Gemini ────────────────────────────────────────────────────────────────────
 
 class GeminiProvider(LLMProvider):
     """
@@ -166,3 +169,40 @@ class GeminiProvider(LLMProvider):
         )
         return response.text.strip()
 
+
+# ─── Phi-3 (local) ─────────────────────────────────────────────────────────────
+
+class Phi3Provider(LLMProvider):
+    """
+    Local Microsoft Phi-3-mini via Hugging Face Transformers.
+    Runs fully offline — no API key needed.
+    Requires a CUDA-capable GPU for reasonable speed.
+
+    pip install transformers torch accelerate
+    """
+
+    def __init__(self, model_id: str = "microsoft/Phi-3-mini-4k-instruct"):
+        torch.random.manual_seed(0)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            device_map="cuda",
+            torch_dtype="auto",
+            trust_remote_code=True,
+        )
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        self._pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+        self._gen_args = {
+            "max_new_tokens": 500,
+            "return_full_text": False,
+            "temperature": 0.0,
+            "do_sample": False,
+        }
+
+    def complete(self, prompt: str) -> str:
+        """Wrap the shared prompt in a chat message and return the raw text response."""
+        messages = [
+            {"role": "system", "content": "You are a structured data extraction assistant. Output only valid JSON."},
+            {"role": "user",   "content": prompt},
+        ]
+        output = self._pipe(messages, **self._gen_args)
+        return output[0]["generated_text"].strip()

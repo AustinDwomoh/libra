@@ -9,20 +9,18 @@ import uuid
 class Company:
     name: str
     db_id: Optional[int] = None
-    #sponsorships: bool = False
     company_url: Optional[str] = None
 
     def __post_init__(self):
         if not self.name or len(self.name) < 1:
             raise ValueError("Company name is required")
-     
+
     def is_valid(self) -> bool:
-        return bool(self.name and self.location)
+        return bool(self.name)
 
     def to_dict(self) -> dict:
         return {
             "name": self.name,
-        #    "sponsorships": self.sponsorships,
             "company_url": self.company_url,
         }
 
@@ -31,21 +29,17 @@ class Company:
         return cls(
             name=data.get("name", "Unknown"),
             db_id=data.get("id"),
-        #    sponsorships=data.get("sponsorships", False),
             company_url=data.get("company_url"),
         )
 
 
 @dataclass
 class Job:
-    #TODO: Validate the date collectons and make sure they are in the correct format (e.g. ISO 8601)
-    #TODO: Add a field for the job ID (if we want to store it in the database) and make sure it is unique
-    #TODO: Make sure all helpers are are consistent with this data model (e.g. the company field should be a Company object, not just an ID)
     title: str
     location: str
     is_remote: bool
     description: str
-    company: uuid.UUID = None  # This should be the company ID, not the full object, to avoid circular references
+    company: uuid.UUID = None  # company ID (UUID), not the full object
     apply_url: Optional[str] = None
     role_type: str = "other"
     pay_range: Optional[list] = None
@@ -62,13 +56,11 @@ class Job:
 
     def is_valid(self) -> bool:
         return bool(
-            
             self.title
             and isinstance(self.company, uuid.UUID)
             and self.location
-            and self.apply_url or  self.description
-
-        ) 
+            and (self.apply_url or self.description)
+        )
 
     def get_salary_info(self) -> str:
         if not self.pay_range:
@@ -78,12 +70,11 @@ class Job:
             return "Not specified"
         return f"${min_sal:,} - ${max_sal:,}"
 
-
     @classmethod
     def from_dict(cls, job: dict, company: uuid.UUID) -> "Job":
         """
         Convert a raw job dictionary into a Job instance.
-        Requires a resolved Company object (look it up by company_id before calling this).
+        Requires a resolved company UUID (look it up before calling this).
         """
         salary_range = job.get("salary_range")
         pay_range = (
@@ -96,7 +87,7 @@ class Job:
             title=job.get("title", ""),
             company=company,
             location=job.get("location", "Unknown"),
-            is_remote=job.get("remote", False),
+            is_remote=job.get("is_remote", None),
             description=job.get("description", ""),
             apply_url=job.get("link") or job.get("apply_url"),
             role_type=job.get("role_type", "other"),
@@ -119,23 +110,19 @@ class Job:
             "source": job.source,
             "tags": job.tags,
         }
- 
+
     @classmethod
     def to_dict_for_db(cls, job: "Job") -> dict:
-        """
-        Convert a Job instance into a dictionary suitable for database insertion.
-        This may involve converting certain fields (e.g. company ID to string) and ensuring all required fields are present.
-        """
-        k = job.tags
-        if isinstance(k, list):
-            job.tags = {f"tag_{i}": tag for i, tag in enumerate(k)}
-        elif isinstance(k, dict):
-            k = job.tags
-        else:
-            k = {}
+        """Convert a Job instance into a dict suitable for database insertion."""
+        tags = job.tags
+        if isinstance(tags, list):
+            tags = {f"tag_{i}": tag for i, tag in enumerate(tags)}
+        elif not isinstance(tags, dict):
+            tags = {}
+
         return {
             "title": job.title,
-            "company": job.company,  # Assuming this is already the company ID (UUID)
+            "company": job.company,
             "location": job.location,
             "is_remote": job.is_remote,
             "description": job.description,
@@ -143,10 +130,9 @@ class Job:
             "role_type": job.role_type,
             "pay_range": job.pay_range,
             "source": job.source,
-            "tags": k, 
-            "identifier": job.__hash__(),  # Add a hash of the job for deduplication purposes
+            "tags": tags,
+            "identifier": job.__hash__(),
         }
-    
 
     def __eq__(self, other):
         if not isinstance(other, Job):
@@ -157,7 +143,6 @@ class Job:
             and self.location == other.location
             and self.apply_url == other.apply_url
         )
-    
+
     def __hash__(self):
-        """Generate a hash based on the job's title, company, location, and apply_url for deduplication purposes"""
         return hash((self.title, self.company, self.location, self.apply_url))

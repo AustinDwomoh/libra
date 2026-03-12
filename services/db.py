@@ -3,7 +3,7 @@ import ssl, asyncpg, json
 
 
 class JobDatabase:
-    "Make asynchronous database connection and operations using psycopg2 use rimuru as template"
+    "Asynchronous database connection and operations using asyncpg."
 
     FETCH = "fetch"
     FETCHVAL = "fetchval"
@@ -128,7 +128,7 @@ class JobDatabase:
         :param order_by: Column to order by (e.g., "created_at DESC")
         """
         try:
-            row = await self.select(table, columns, filters, order_by, limit=1)
+            row = await self.select(table, columns=columns, filters=filters, order_by=order_by, limit=1)
             return row[0] if row else None
         except Exception as e:
             Config.logger.error(f"Error during selectOne from {table}: {e}")
