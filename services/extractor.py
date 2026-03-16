@@ -22,6 +22,7 @@ Setup:
     GEMINI_KEY=your_key_here        # https://aistudio.google.com/app/apikey (free tier)
 """
 
+import asyncio
 import re, json, logging, time, uuid, requests
 
 from dataclasses import dataclass, field as dc_field
@@ -29,6 +30,7 @@ from typing import Optional
 from bs4 import BeautifulSoup
 from services.llm import  GroqProvider, LLMProvider,Phi3Provider
 from services.config import Config
+from services.models import Job
 
 
 # ─── Utilities ─────────────────────────────────────────────────────────────────
@@ -236,7 +238,7 @@ def _apply_to_job(job: "Job", extracted: dict) -> list[str]:
 
 # ─── Main Entry Point ──────────────────────────────────────────────────────────
 
-def enrich_job(
+async def enrich_job(
     job: "Job",
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
@@ -245,7 +247,11 @@ def enrich_job(
     if use_llm and provider is None:
         provider = GroqProvider()
 
-    meta = {"stages_run": [], "fields_filled": [], "provider": provider.__class__.__name__ if provider else None}
+    meta = {
+        "stages_run": [],
+        "fields_filled": [],
+        "provider": provider.__class__.__name__ if provider else None,
+    }
     fields_to_check = ["pay_range", "is_remote", "role_type", "location", "tags", "description"]
 
     missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
@@ -258,19 +264,28 @@ def enrich_job(
     desc_text = Config.strip_html(job.description or "")
     has_description = len(desc_text.strip()) > 100
 
-    # ── Stage 1: Regex on description ──
+    # ── Stage 1: Regex on description (only if we have one) ──
     if has_description:
         meta["stages_run"].append("regex")
         extracted = run_regex_stage(job)
         filled = _apply_to_job(job, extracted)
         meta["fields_filled"].extend(f"{f} (regex)" for f in filled)
 
-    # ── Stage 2: LLM on description ──
+    # ── Stage 2: LLM ──
+    # Run even without a description — use title + apply_url as minimal context.
+    # This lets Groq infer role_type, is_remote, and generate a short description.
     missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
-    if missing and use_llm and has_description and provider:
-        Config.logger.info(f"LLM fallback on description for: {missing}")
-        meta["stages_run"].append("llm_description")
-        extracted = provider.extract(job, desc_text)
+    if missing and use_llm and provider:
+        llm_text = desc_text if has_description else (
+            f"Job title: {job.title}\n"
+            f"Location: {job.location or 'unknown'}\n"
+            f"Apply URL: {job.apply_url or 'unknown'}"
+        )
+        Config.logger.info(
+            f"LLM {'on description' if has_description else 'on title/url'} for: {missing}"
+        )
+        meta["stages_run"].append("llm_description" if has_description else "llm_title")
+        extracted = provider.extract(job, llm_text)
         filled = _apply_to_job(job, extracted)
         meta["fields_filled"].extend(f"{f} (llm)" for f in filled)
 
@@ -282,7 +297,6 @@ def enrich_job(
         scraped = scrape_apply_url(job.apply_url)
 
         if scraped:
-            # ── Stage 3a: Regex on scraped text (catches pay buried at bottom) ──
             meta["stages_run"].append("regex_scraped")
             if Config.is_missing(job.pay_range):
                 pay = _regex_pay(scraped)
@@ -300,7 +314,6 @@ def enrich_job(
                     job.role_type = role
                     meta["fields_filled"].append("role_type (regex+scrape)")
 
-            # ── Stage 3b: LLM on scraped text ──
             missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
             if missing and use_llm and provider:
                 meta["stages_run"].append("llm_scraped")
@@ -311,7 +324,7 @@ def enrich_job(
     Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
     return meta
 
-def enrich_jobs_batch(
+async def enrich_jobs_batch(
     jobs: list["Job"],
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
@@ -329,29 +342,17 @@ def enrich_jobs_batch(
     results = []
     for i, job in enumerate(jobs):
         Config.logger.info(f"Job {i+1}/{len(jobs)}")
-        meta = enrich_job(job, provider=provider, use_llm=use_llm, scrape_if_empty=scrape_if_empty)
+        meta = await enrich_job(job, provider=provider, use_llm=use_llm, scrape_if_empty=scrape_if_empty)
         results.append(meta)
         if use_llm and i < len(jobs) - 1:
-            time.sleep(llm_delay)
+            await asyncio.sleep(llm_delay)
     return results
 
 
 # ─── Example ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    @dataclass
-    class Job:
-        title: str
-        location: str
-        is_remote: bool
-        description: str
-        company: uuid.UUID = None
-        apply_url: Optional[str] = None
-        role_type: str = "other"
-        pay_range: Optional[list] = None
-        source: str = "unknown"
-        tags: dict = dc_field(default_factory=dict)
-
+ 
     company_id = uuid.UUID("6c8333ed-7275-4565-9392-81a9aa46aa45")
 
     job1 = Job(
@@ -370,8 +371,9 @@ if __name__ == "__main__":
     print("=== Before ===")
     print(job1)
 
+
     # Swap provider here —  or GeminiProvider()
-    meta = enrich_job(job1, provider=GroqProvider(), scrape_if_empty=True)
+    meta = asyncio.run(enrich_job(job1, provider=GroqProvider(), scrape_if_empty=True))
 
     print("\n=== After ===")
     print(job1)

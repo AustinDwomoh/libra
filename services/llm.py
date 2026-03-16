@@ -122,7 +122,7 @@ class GroqProvider(LLMProvider):
             self._client = Groq(api_key=api_key)
         return self._client
 
-    def complete(self, prompt: str) -> str:
+    def complete(self, prompt: str) -> str|None:
         client = self._get_client()
         response = client.chat.completions.create(
             model=self.model,

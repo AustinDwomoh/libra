@@ -44,7 +44,7 @@ class RemoteOKHelper:
            Config.logger.error(f"RemoteOK API error: {e}")
            return []
 
-    async def _map_job(self, job: Dict) -> Job:
+    async def _map_job(self, job: Dict) -> Job|None:
         """Map JSearch response to standard job format"""
         compnay_dict = {
             "name": (job.get("company") or "unknown").lower(),
@@ -57,7 +57,7 @@ class RemoteOKHelper:
        
 
         refined_job = {
-            "title": job.get("position").lower(),
+            "title": job.get("position").lower(), # type: ignore
             "location": job.get("location") or Defaults.LOCATION_NOT_SPECIFIED,
             "is_remote": job.get("remote", True),  # RemoteOK only lists remote jobs
             "description": job.get("description", ""),
@@ -71,11 +71,11 @@ class RemoteOKHelper:
         }
         #print(f"Mapped job: {refined_job}")
         try:
-            job = Job.from_dict(refined_job, company=company.get("id"))
+            njob = Job.from_dict(refined_job, company=company.get("id"))
         except ValueError as e:
             Config.logger.error(f"Error mapping job: {e}")
-            return None#return empty to avoid breaking the loop, we can filter out invalid jobs later
-        return job  
+            return None  #return empty to avoid breaking the loop, we can filter out invalid jobs later
+        return njob  
 
 if __name__ == "__main__":
     helper = RemoteOKHelper()

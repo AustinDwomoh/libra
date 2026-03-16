@@ -2,13 +2,16 @@
 azalea.py - Refactored main orchestrator
 """
 
+import json
 from typing import List, Dict, Optional
 from dataclasses import dataclass
+from uuid import UUID
 from services.Remote import RemoteOKHelper
 from services.models import Job
 from services.db import JobDatabase
 from services.config import Config
 from services.jsearch import JSearch
+from services.refine import enrich_unenriched_jobs
 from services.simplify import Simplify
 from services.notify import notify_discord
 from services.constants import (
@@ -32,7 +35,7 @@ class JobStats:
     unique_jobs: int = 0
     inserted: int = 0
     errors: int = 0
-    position_type: Optional[str] = None
+    position_type: Optional[PositionType] = None
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for compatibility"""
@@ -67,8 +70,8 @@ class Azalea:
     """Main orchestrator/controller for job scraping operations"""
 
     def __init__(self):
-        self.jobs: List[Dict] = []
-        self.helpers: Dict[JobSource, any] = {}
+        self.jobs: List[Job] = []
+        self.helpers: Dict[JobSource, any] = {} # type: ignore
         self.stats = JobStats()
         self._init_helpers()
 
@@ -224,52 +227,87 @@ class Azalea:
         position_type: PositionType = PositionType.INTERN,
         save_json: bool = True,
         jsearch_queries: Optional[List[str]] = None,
+        enrich: bool = True,              # ← new flag, on by default
+        enrich_batch_size: int = 100,      # ← guards Groq rate limits
     ) -> Dict:
         """Main orchestration method"""
+        # Add this import at the top of azalea.py:
+        # from services.enrich_pipeline import enrich_unenriched_jobs
 
         try:
-            # Step 1: Fetch from sources
-            self.stats.reset_source_counts()
-            self.stats.position_type = position_type
-
-            all_jobs = await self.fetch_all_sources(
-                position_type=position_type, jsearch_queries=jsearch_queries
-            )
-
-            if not all_jobs:
-                Config.logger.warning("No jobs found to process")
-                return self.stats.to_dict()
-
-            # Step 2: Deduplicate — filter None first so set() doesn't swallow bad entries
-            self._log_section("DEDUPLICATING JOBS")
-            valid_jobs = [job for job in all_jobs if job is not None]
-            unique_jobs = list(set(valid_jobs))
-            unique_jobs = [job for job in unique_jobs if job.is_valid()]
-            self.stats.unique_jobs = len(unique_jobs)
-            self.jobs = unique_jobs
-            Config.logger.info(LogMessages.deduplication_result(len(all_jobs), len(unique_jobs)))
-
-            # Step 3: Save to JSON (optional)
-
-            if save_json:
-                Config.save_to_json([job.to_dict(job) for job in unique_jobs ])
-            # Step 5``: Save to database
+            #self.stats.reset_source_counts()
+            #self.stats.position_type = position_type
+#
+            ## ── Step 1: Fetch ────────────────────────────────────────────────
+            #all_jobs = await self.fetch_all_sources(
+            #    position_type=position_type, jsearch_queries=jsearch_queries
+            #)
+#
+            #if not all_jobs:
+            #    Config.logger.warning("No jobs found to process")
+            #    return self.stats.to_dict()
+#
+            ## ── Step 2: Deduplicate ──────────────────────────────────────────
+            #self._log_section("DEDUPLICATING JOBS")
+            #valid_jobs = [job for job in all_jobs if job is not None]
+            #unique_jobs = list(set(valid_jobs))
+            #unique_jobs = [job for job in unique_jobs if job.is_valid()]
+            #self.stats.unique_jobs = len(unique_jobs)
+            #self.jobs = unique_jobs
+            #Config.logger.info(
+            #    LogMessages.deduplication_result(len(all_jobs), len(unique_jobs))
+            #)
+#
+            ## ── Step 3: Save JSON (optional) ─────────────────────────────────
+            #if save_json:
+                #Config.save_to_json([Job.to_dict(job) for job in unique_jobs])
+            unique_jobs = [] # Placeholder to avoid NameError, replace with actual deduplication result
+            with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
+                unique_jobs = json.load(f)
+                for job_dict in unique_jobs:
+                    try:
+                        company_id = UUID(job_dict.get("company", None))
+                        job = Job.from_dict(job_dict, company=company_id)
+                        self.jobs.append(job)
+                    except Exception as e:
+                        Config.logger.error(f"Error loading job from JSON: {e}")
+                
+            # ── Step 4: Insert to DB ─────────────────────────────────────────
             self._log_section("SAVING TO DATABASE")
             db = await JobDatabase.create()
-            inserted_count = 0
-            list_jobs = [Job.to_dict_for_db(job) for job in unique_jobs if job.title != "unknown"]
+            """ list_jobs = [
+                Job.to_dict_for_db(job)
+                for job in unique_jobs
+                if job.title != "unknown"
+            ] """
+            list_jobs = unique_jobs
+            inserted = await db.bulk_upsert(
+                "job_list", list_jobs, conflict_column="identifier"
+            )
+            self.stats.inserted = len(inserted)
+            Config.logger.info(
+                f"Inserted {self.stats.inserted} new jobs into the database"
+            )
 
-            inserted_count = await db.bulk_upsert("job_list", list_jobs, conflict_column="identifier")
-            self.stats.inserted = len(inserted_count)
-            Config.logger.info(f"Inserted {len(inserted_count)} new jobs into the database")
+            # ── Step 5: Enrich unenriched jobs via Groq ──────────────────────
+            if enrich:
+                self._log_section("ENRICHING JOBS (Groq)")
+                enrich_stats = await enrich_unenriched_jobs(
+                    batch_size=enrich_batch_size
+                )
+                Config.logger.info(f"Enrichment stats: {enrich_stats}")
+
             self.print_summary()
-
             return self.stats.to_dict()
 
         except Exception as e:
             self.stats.errors = 1
             Config.logger.error(f"Error in run process: {e}", exc_info=True)
             raise
+    async def check_job_validity(self, job: Job) -> bool:
+        """Check if a job posting is still valid/active"""
+        # Placeholder for future implementation
+        return True
 
 
 def main():

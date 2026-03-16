@@ -9,27 +9,13 @@ class JobDatabase:
     FETCHVAL = "fetchval"
     FETCHROW = "fetchrow"
     _instance = None
-    _pool: asyncpg.Pool = None
+    _pool: asyncpg.Pool
 
     def __init__(self, pool: asyncpg.Pool):
         self.pool = pool
 
-    # ----------------------------------------------------
-    # FACTORY: Create async Rimiru instance
-    # ----------------------------------------------------
     @classmethod
     async def create(cls):
-        """
-        The `create` function is an asynchronous method that creates a connection pool to a PostgreSQL
-        database with specified configurations.
-
-        :param cls: The `cls` parameter in the `create` method is a reference to the class itself. In this
-        context, it is used to access class attributes and methods
-        :return: The `create` method is returning an instance of the class `cls`. If `cls._instance` is
-        not None, it returns the existing instance stored in `cls._instance`. Otherwise, it creates a new
-        instance of the class using the asyncpg connection pool created with the specified configurations
-        and returns this new instance.
-        """
         if cls._instance is not None:
             return cls._instance
 
@@ -61,20 +47,9 @@ class JobDatabase:
         filters: dict = None,
         raw_where: str = None,
         raw_params: list = None,
-        order_by: str = None,
-        limit: int = None,
+        order_by: str = "created_at DESC",
+        limit: int = 100,
     ):
-        """
-        Select records with optional filtering
-
-        :param table: Table name
-        :param columns: List of columns to select (default: all)
-        :param filters: Dictionary of column=value filters
-        :param raw_where: Raw WHERE clause (use with raw_params for safety)
-        :param raw_params: Parameters for raw_where clause
-        :param order_by: Column to order by
-        :param limit: Maximum number of records to return
-        """
         try:
             cols = ", ".join(columns) if columns else "*"
             sql = f"SELECT {cols} FROM {table}"
@@ -90,19 +65,14 @@ class JobDatabase:
                 sql += f" WHERE {' AND '.join(where_clauses)}"
 
             if raw_where:
-                if filters:
-                    sql += f" AND ({raw_where})"
-                else:
-                    sql += f" WHERE {raw_where}"
+                sql += f" AND ({raw_where})" if filters else f" WHERE {raw_where}"
                 if raw_params:
                     params.extend(raw_params)
 
             if order_by:
                 sql += f" ORDER BY {order_by}"
-
             if limit:
                 sql += f" LIMIT {limit}"
-
             sql += ";"
 
             async with self.pool.acquire() as conn:
@@ -117,16 +87,8 @@ class JobDatabase:
         table: str,
         columns: list = None,
         filters: dict = None,
-        order_by: str = None,
+        order_by: str = "created_at DESC",
     ):
-        """
-        Select a single record with optional filtering
-
-        :param table: Table name
-        :param columns: List of columns to select (default: all)
-        :param filters: Dictionary of column=value filters
-        :param order_by: Column to order by (e.g., "created_at DESC")
-        """
         try:
             row = await self.select(table, columns=columns, filters=filters, order_by=order_by, limit=1)
             return row[0] if row else None
@@ -135,97 +97,56 @@ class JobDatabase:
             raise
 
     # -------------------------
-    # UPSERT (INSERT or UPDATE)
+    # UPSERT
     # -------------------------
-    async def upsert(self, table: str, data: dict, conflict_column: str = None):
-        """Insert or update a record based on conflict column
-        To use this method, provide the following
-        its important you know the unique constraint of the table you are upserting to.  The conflict_column parameter should be set to that unique constraint column.
-
-            parameters:
-                :param table: Table name
-                :param data: Dictionary of column-value pairs
-                :param conflict_column: Column name to check for conflicts
-        """
+    async def upsert(self, table: str, data: dict, conflict_column: str | list | None = None):
         try:
             columns = list(data.keys())
             values = [
                 json.dumps(v) if isinstance(v, (dict, list)) else v
                 for v in data.values()
             ]
-
             placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
             cols = ", ".join(columns)
-            on_conflict = f"ON CONFLICT DO NOTHING"
-            if conflict_column:
-                update_fields = [k for k in columns if k != conflict_column]
-                if update_fields:
-                    update_cols = ", ".join(
-                        f"{k} = EXCLUDED.{k}" for k in update_fields
-                    )
-                    on_conflict = (
-                        f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}"
-                    )
-        
-                
+
+            _, on_conflict = self._build_conflict_clause(columns, conflict_column, table)
+
             sql = f"""
-                INSERT INTO {table} ({cols}) 
+                INSERT INTO {table} ({cols})
                 VALUES ({placeholders})
                 {on_conflict}
                 RETURNING *;
             """
-
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow(sql, *values)
                 return dict(row) if row else None
         except Exception as e:
             Config.logger.error(f"Error during upsert to {table}: {e}")
             raise
-        # -------------------------
-        # DELETE
 
-    # -------------------------
-    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str=None):
+    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str | list | None = None):
         if not rows:
             return []
 
         columns = list(rows[0].keys())
         cols = ", ".join(columns)
 
-        # Build placeholders
+        _, on_conflict = self._build_conflict_clause(columns, conflict_column, table)
+
         values = []
         placeholder_groups = []
         param_index = 1
-       
-        on_conflict = f"ON CONFLICT DO NOTHING"
-        if conflict_column:
-            update_fields = [k for k in columns if k != conflict_column]
-            if update_fields:
-                update_cols = ", ".join(
-                    f"{k} = EXCLUDED.{k}" for k in update_fields
-                )
-                on_conflict = (
-                    f"ON CONFLICT ({conflict_column}) DO UPDATE SET {update_cols}"
-                )
-        
+
         for row in rows:
             group = []
             for col in columns:
-                if isinstance(row[col], (dict, list)):
-                    value = json.dumps(row[col])
-                else:
-                    value = row[col]
-                values.append(value)
+                val = row[col]
+                values.append(json.dumps(val) if isinstance(val, (dict, list)) else val)
                 group.append(f"${param_index}")
                 param_index += 1
             placeholder_groups.append(f"({', '.join(group)})")
 
         placeholders = ", ".join(placeholder_groups)
-
-        # Build update clause
-        update_cols = ", ".join(
-            f"{col} = EXCLUDED.{col}" for col in columns if col != conflict_column
-        )
 
         sql = f"""
             INSERT INTO {table} ({cols})
@@ -233,51 +154,72 @@ class JobDatabase:
             {on_conflict}
             RETURNING *;
         """
-
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch(sql, *values)
-            return [dict(r) for r in rows]
+            result = await conn.fetch(sql, *values)
+            return [dict(r) for r in result]
 
-    # -------------------------
     async def delete(self, table: str, filters: dict):
-        """Delete records matching filters"""
         try:
             where_clause = " AND ".join(
                 f"{k} = ${i+1}" for i, k in enumerate(filters.keys())
             )
             sql = f"DELETE FROM {table} WHERE {where_clause} RETURNING *;"
-            params = list(filters.values())
-
             async with self.pool.acquire() as conn:
-                return await conn.fetch(sql, *params)
+                return await conn.fetch(sql, *list(filters.values()))
         except Exception as e:
             Config.logger.error(f"Error during delete from {table}: {e}")
             raise
 
-    # ----------------------------------------------------
-    # ASYNC FUNCTION CALLS
-    # ----------------------------------------------------
     async def call_function(self, fn: str, params=None, fetch_type=None):
-        """
-        fetch_type can be:
-        - FetchType.FETCH: returns list of Record objects
-        - FetchType.FETCHVAL: returns single scalar value
-        - FetchType.FETCHROW: returns single Record object
-        """
         try:
             params = params or []
-            fetch_type = fetch_type or self.FETCH  # Default to FETCH
-
+            fetch_type = fetch_type or self.FETCH
             placeholders = ", ".join(f"${i+1}" for i in range(len(params)))
             sql = f"SELECT * FROM {fn}({placeholders});"
-
             async with self.pool.acquire() as conn:
                 if fetch_type == self.FETCHVAL:
                     return await conn.fetchval(sql, *params)
                 elif fetch_type == self.FETCHROW:
                     return await conn.fetchrow(sql, *params)
-                else:  # self.FETCH
+                else:
                     return await conn.fetch(sql, *params)
         except Exception as e:
             Config.logger.error(f"Error during call_function {fn}: {e}")
             raise
+
+    # ----------------------------------------------------
+    #  CONFLICT CLAUSE BUILDER
+    # ----------------------------------------------------
+    def _build_conflict_clause(
+        self,
+        columns: list[str],
+        conflict_column: str | list | None,
+        table_name: str,          # required — used to qualify existing row reference
+    ) -> tuple[list[str], str]:
+        """
+        Build the ON CONFLICT ... DO UPDATE clause.
+
+        Uses COALESCE so existing non-null values are never overwritten by a null
+        from a re-scrape.  e.g.:
+            title = COALESCE(EXCLUDED.title, job_list.title)
+
+        conflict_column can be:
+          - None                  → ON CONFLICT DO NOTHING
+          - "identifier"          → ON CONFLICT (identifier) DO UPDATE ...
+          - ["company", "title"]  → ON CONFLICT (company, title) DO UPDATE ...
+        """
+        if not conflict_column:
+            return [], "ON CONFLICT DO NOTHING"
+
+        conflict_cols = conflict_column if isinstance(conflict_column, list) else [conflict_column]
+        conflict_target = ", ".join(conflict_cols)
+
+        update_fields = [c for c in columns if c not in conflict_cols]
+        if not update_fields:
+            return conflict_cols, f"ON CONFLICT ({conflict_target}) DO NOTHING"
+
+        update_clause = ", ".join(
+            f"{c} = COALESCE(EXCLUDED.{c}, {table_name}.{c})"
+            for c in update_fields
+        )
+        return conflict_cols, f"ON CONFLICT ({conflict_target}) DO UPDATE SET {update_clause}"
