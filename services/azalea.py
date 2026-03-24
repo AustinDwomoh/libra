@@ -228,7 +228,7 @@ class Azalea:
         save_json: bool = True,
         jsearch_queries: Optional[List[str]] = None,
         enrich: bool = True,              # ← new flag, on by default
-        enrich_batch_size: int = 100,      # ← guards Groq rate limits
+        enrich_batch_size: int = 10,      # ← guards Groq rate limits
     ) -> Dict:
         """Main orchestration method"""
         # Add this import at the top of azalea.py:

@@ -7,10 +7,11 @@
         
 
         {
-            "name": "Python Debugger: Module",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "services"
-        }
+    "name": "Python Debugger: Module",
+    "type": "debugpy",
+    "request": "launch",
+    "module": "services.azalea",
+    "cwd": "${workspaceFolder}"
+}
     ]
 }

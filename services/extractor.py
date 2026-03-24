@@ -242,7 +242,6 @@ async def enrich_job(
     job: "Job",
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
-    scrape_if_empty: bool = True,
 ) -> dict:
     if use_llm and provider is None:
         provider = GroqProvider()
@@ -291,7 +290,7 @@ async def enrich_job(
 
     # ── Stage 3: Scrape apply_url ──
     missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
-    if missing and scrape_if_empty and job.apply_url:
+    if missing  and job.apply_url:
         Config.logger.info(f"Scraping apply URL for: {missing}")
         meta["stages_run"].append("scrape")
         scraped = scrape_apply_url(job.apply_url)
@@ -322,13 +321,13 @@ async def enrich_job(
                 meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
 
     Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
+    breakpoint()
     return meta
 
 async def enrich_jobs_batch(
     jobs: list["Job"],
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
-    scrape_if_empty: bool = True,
     llm_delay: float = 0.5,
 ) -> list[dict]:
     """
@@ -342,7 +341,7 @@ async def enrich_jobs_batch(
     results = []
     for i, job in enumerate(jobs):
         Config.logger.info(f"Job {i+1}/{len(jobs)}")
-        meta = await enrich_job(job, provider=provider, use_llm=use_llm, scrape_if_empty=scrape_if_empty)
+        meta = await enrich_job(job, provider=provider, use_llm=use_llm)
         results.append(meta)
         if use_llm and i < len(jobs) - 1:
             await asyncio.sleep(llm_delay)

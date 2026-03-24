@@ -64,7 +64,6 @@ def _build_update_payload(job: Job) -> dict:
 async def enrich_unenriched_jobs(
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
-    scrape_if_empty: bool = False,   # scraping is slow; off by default
     batch_size: int = 50,
     llm_delay: float = 0.5,
 ) -> dict:
@@ -94,7 +93,7 @@ async def enrich_unenriched_jobs(
         order_by="created_at ASC",
         limit=batch_size,
     )
-
+    
     if not rows:
         Config.logger.info("Enrichment: no unenriched jobs found.")
         return stats
@@ -110,7 +109,7 @@ async def enrich_unenriched_jobs(
             await _mark_enriched(db, job_id)
             stats["skipped"] += 1
             continue
-
+        
         try:
             job = _row_to_job(row)
         except (ValueError, KeyError) as e:
@@ -124,8 +123,8 @@ async def enrich_unenriched_jobs(
                 job,
                 provider=provider,
                 use_llm=use_llm,
-                scrape_if_empty=scrape_if_empty,
             )
+            
             Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
         except Exception as e:
             Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
@@ -136,6 +135,7 @@ async def enrich_unenriched_jobs(
         # Persist enriched fields + set enriched=true
         try:
             payload = _build_update_payload(job)
+            
             await db.upsert("job_list", payload, conflict_column="identifier")
             stats["enriched"] += 1
         except Exception as e:
