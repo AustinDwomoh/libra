@@ -4,15 +4,21 @@ jsearch.py - Refactored with constants
 import asyncio
 from typing import List, Dict
 import requests,json,time
-from services.models import Job
-from services.config import Config
-from services.constants import (PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults)
-from services.db import JobDatabase
+from Utils.models import Job
+from Utils.constants import PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
+from Services.db import JobDatabase
 
 
 
 class JSearch:
-    """Helper class for JSearch API integration via OpenWebNinja"""
+    """Helper class for JSearch API integration via OpenWebNinja
+    
+    This class handles all interactions with the JSearch API, including:
+    - Building search queries based on position type
+    - Making HTTP requests with proper headers and parameters
+    - Handling rate limits and retries
+    - Processing and mapping API responses to our standard Job format
+    """
 
     def __init__(self):
         self.api_key = Config.J_SEARCH_API_KEY
@@ -28,7 +34,10 @@ class JSearch:
     # ============================================================================ #
 
     def _build_search_query(self, query: str, position_type: PositionType) -> str:
-        """Build search query based on position type"""
+        """Build search query based on position type
+        
+        This centralizes the logic for how we construct search queries, ensuring consistency across both the query string and the employment_types filter.
+        """
         if position_type == PositionType.INTERN:
             return f"{query} {SearchQueries.INTERN_SUFFIX}" if query else SearchQueries.INTERN_SUFFIX
         elif position_type == PositionType.FULLTIME:
@@ -41,7 +50,7 @@ class JSearch:
             "query": search_query,
             "page": page,
             "num_pages": JSearchConfig.DEFAULT_NUM_PAGES,
-            "date_posted": date_posted,
+            "date_posted": date_posted.value,
         }
 
         # Only add employment_types for non-hybrid requests; the query suffix already
@@ -180,7 +189,7 @@ class JSearch:
             "tags": job.get("job_highlights"),
         }
    
-        return Job.from_dict(refined_job, company=company.get("id"))
+        return Job.from_dict(refined_job, company=company.get("id")) #type: ignore might be None but will raise in that case, which is fine
 
     def _extract_salary(self, job: Dict):
         """Extract salary range from job data"""
@@ -194,7 +203,7 @@ class JSearch:
     #                                 FETCH FNS                                    #
     # ============================================================================ #
 
-    async def fetch_jobs( self, queries: List[str] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
+    async def fetch_jobs( self, queries: List[str] = [], position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
         """
         Fetch jobs across multiple search queries with rate limiting.
 
@@ -248,7 +257,7 @@ class JSearch:
             f"JSearch: Fetching {position_type} results for '{search_query}' (posted: {date_posted.value})"
         )
 
-        params = self._build_request_params(search_query, position_type, page, date_posted.value)
+        params = self._build_request_params(search_query, position_type, page, date_posted)
 
         for attempt in range(retry_count):
             try:

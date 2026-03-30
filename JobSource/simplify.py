@@ -1,22 +1,12 @@
 """
 simplify.py - Refactored with constants and improved structure
 """
-import asyncio
-import json
+import asyncio, json, requests,emoji
 from typing import List, Dict, Optional
-import requests
-import emoji
 from bs4 import BeautifulSoup
-from services.config import Config
-from services.models import Job
-from services.constants import (
-    JobSource,
-    SimplifyConfig,
-    HTTPStatus,
-    Defaults,
-    FilePaths,
-)
-from services.db import JobDatabase
+from Utils.models import Job
+from Utils.constants import JobSource, SimplifyConfig, Defaults, FilePaths, Config
+from Services.db import JobDatabase
 
 logger = Config.logger
 

@@ -3,7 +3,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from services.db import JobDatabase
+from Services.db import JobDatabase
 
 
 @asynccontextmanager
@@ -68,7 +68,7 @@ async def get_jobs(
 ):
     """Get all jobs ordered by most recent, with an optional limit."""
     db: JobDatabase = request.app.state.db
-    jobs = await db.select("job_list", order_by="created_at DESC", limit=limit)
+    jobs = await db.select("job_list", order_by="created_at DESC", limit=limit)#type: ignore
     return {
         "success": True,
         "params": {"limit": limit},
@@ -89,7 +89,7 @@ async def get_jobs_by_company(
         raw_where="company = (SELECT id FROM company WHERE name = $1)",
         raw_params=[company_name.lower()],
         order_by="created_at DESC",
-        limit=limit,
+        limit=limit, #type: ignore
     )
     return {
         "success": True,

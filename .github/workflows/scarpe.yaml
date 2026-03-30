@@ -10,18 +10,14 @@ on:
   workflow_dispatch:
 
 jobs:
-  run-script:
+  scrape:
+    name: Scrape Jobs
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Deploy via SSH
+      - name: Run scraper via SSH
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.SSH_HOST }}
@@ -29,16 +25,43 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -euo pipefail
-
             cd /var/www/libra/
             source libra/bin/activate
             git pull origin main
             pip install -r requirements.txt --upgrade-strategy only-if-needed
-            python3 -m services.azalea > azalea.log 2>&1
+            PYTHONPATH=/var/www/libra python3 Tasks/scrape.py > logs/scrape.log 2>&1
 
       - name: Notify Discord on failure
         if: failure()
         run: |
           curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":x: <@755872891601551511>\nLibra job scrape failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          -d "{\"content\": \":x: <@755872891601551511>\nLibra **scrape** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+  enrich:
+    name: Enrich Jobs
+    runs-on: ubuntu-latest
+    needs: scrape
+    if: github.event.schedule == '0 5 * * *' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run enrichment via SSH
+        uses: appleboy/ssh-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            set -euo pipefail
+            cd /var/www/libra/
+            source libra/bin/activate
+            PYTHONPATH=/var/www/libra python3 Tasks/enrich.py > logs/enrich.log 2>&1
+
+      - name: Notify Discord on failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{\"content\": \":x: <@755872891601551511>\nLibra **enrich** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}

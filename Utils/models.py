@@ -1,8 +1,49 @@
 from dataclasses import dataclass, field
-import datetime
-from typing import Optional, List
+from typing import Optional,Dict
+from Utils.constants import PositionType, JobSource, StatsKeys
 
 import uuid
+
+@dataclass
+class JobStats:
+    """Statistics for job scraping operations"""
+
+    simplify: int = 0
+    jsearch: int = 0
+    remoteok: int = 0
+    total_fetched: int = 0
+    unique_jobs: int = 0
+    inserted: int = 0
+    errors: int = 0
+    position_type: Optional[PositionType] = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for compatibility"""
+        return {
+            StatsKeys.SIMPLIFY: self.simplify,
+            StatsKeys.JSEARCH: self.jsearch,
+            StatsKeys.REMOTEOK: self.remoteok,
+            StatsKeys.TOTAL_FETCHED: self.total_fetched,
+            StatsKeys.UNIQUE_JOBS: self.unique_jobs,
+            StatsKeys.INSERTED: self.inserted,
+            StatsKeys.ERRORS: self.errors,
+            StatsKeys.POSITION_TYPE: self.position_type,
+        }
+
+    def reset_source_counts(self):
+        """Reset per-source counters"""
+        self.simplify = 0
+        self.jsearch = 0
+        self.remoteok = 0
+
+    def increment_source(self, source: JobSource, count: int):
+        """Increment counter for a specific source"""
+        if source == JobSource.SIMPLIFY:
+            self.simplify += count
+        elif source == JobSource.JSEARCH:
+            self.jsearch += count
+        elif source == JobSource.REMOTEOK:
+            self.remoteok += count
 
 
 @dataclass
@@ -32,17 +73,16 @@ class Company:
             company_url=data.get("company_url"),
         )
 
-
 @dataclass
 class Job:
     title: str
     location: str
     is_remote: bool
     description: str
-    company: uuid.UUID = None  # company ID (UUID), not the full object
+    company: uuid.UUID | None = None
     apply_url: Optional[str] = None
     role_type: str = "other"
-    pay_range: Optional[list] = None
+    pay_range: Optional[list] = None #type: ignore
     source: str = "unknown"
     tags: dict[str, str] = field(default_factory=dict)
 
@@ -71,7 +111,7 @@ class Job:
         return f"${min_sal:,} - ${max_sal:,}"
 
     @classmethod
-    def from_dict(cls, job: dict, company: uuid.UUID) -> "Job":
+    def from_dict(cls, job: dict, company: uuid.UUID|None) -> "Job":
         """
         Convert a raw job dictionary into a Job instance.
         Requires a resolved company UUID (look it up before calling this).
@@ -87,7 +127,7 @@ class Job:
             title=job.get("title", ""),
             company=company,
             location=job.get("location", "Unknown"),
-            is_remote=job.get("is_remote", None),
+            is_remote=job.get("is_remote", None), #type: ignore
             description=job.get("description", ""),
             apply_url=job.get("link") or job.get("apply_url"),
             role_type=job.get("role_type", "other"),
@@ -98,6 +138,7 @@ class Job:
 
     @classmethod
     def to_dict(cls, job: "Job") -> dict:
+        
         return {
             "title": job.title,
             "company": str(job.company) if job.company else None,

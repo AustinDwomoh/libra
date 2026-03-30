@@ -1,36 +1,9 @@
-"""
-Job Enricher — fills missing fields on a Job dataclass instance.
-
-Matches the Job dataclass schema exactly:
-  - pay_range: [min, max] list (not a dict)
-  - is_remote: bool
-  - role_type: str
-  - location: str
-  - tags: dict[str, str]
-
-Pipeline:
-  Stage 1 — Regex on description (free, instant)
-  Stage 2 — LLM on description (Groq or Gemini)
-  Stage 3 — Scrape apply_url with Playwright + LLM (JS-heavy sites like Taleo, Workday, Greenhouse)
-
-Setup:
-    pip install groq google-genai beautifulsoup4 requests playwright python-dotenv
-    playwright install chromium
-
-    # In your .env file:
-    GROQ_API_KEY=your_key_here      # https://console.groq.com  (free, no CC)
-    GEMINI_KEY=your_key_here        # https://aistudio.google.com/app/apikey (free tier)
-"""
-
-import asyncio
-import re, json, logging, time, uuid, requests
-
-from dataclasses import dataclass, field as dc_field
+import re, json, uuid, requests, asyncio
 from typing import Optional
 from bs4 import BeautifulSoup
-from services.llm import  GroqProvider, LLMProvider,Phi3Provider
-from services.config import Config
-from services.models import Job
+from Refine.llm import  GroqProvider, LLMProvider
+from Utils.constants import Config
+from Utils.models import Job
 
 
 # ─── Utilities ─────────────────────────────────────────────────────────────────
@@ -164,24 +137,24 @@ def run_regex_stage(job: "Job") -> dict:
 
 _HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"}
 
-def scrape_apply_url(url: str) -> Optional[str]:
+async def scrape_apply_url(url: str) -> Optional[str]:
     """
     Scrape a URL using Playwright (handles JS-heavy sites: Taleo, Workday, Greenhouse).
     Falls back to plain requests if Playwright is not installed.
     """
     try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, timeout=15000)
-            page.wait_for_load_state("networkidle", timeout=15000)
-            page.evaluate(
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
+            await page.goto(url, timeout=15000)
+            await page.wait_for_load_state("networkidle", timeout=15000)
+            await page.evaluate(
                 "document.querySelectorAll('nav,footer,header,script,style')"
                 ".forEach(el => el.remove())"
             )
-            text = page.inner_text("body")
-            browser.close()
+            text = await page.inner_text("body")
+            await browser.close()
             Config.logger.info("Scraped with Playwright")
             Config.logger.warning("Playwright scrape is best effort and may fail on some sites. Always verify results.")
             return Config.clean_ws(text)[:10000]
@@ -243,6 +216,7 @@ async def enrich_job(
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
 ) -> dict:
+    Config.logger.info(f"Enriching job: {job.title} at {job.company} for {job}")
     if use_llm and provider is None:
         provider = GroqProvider()
 
@@ -293,7 +267,7 @@ async def enrich_job(
     if missing  and job.apply_url:
         Config.logger.info(f"Scraping apply URL for: {missing}")
         meta["stages_run"].append("scrape")
-        scraped = scrape_apply_url(job.apply_url)
+        scraped = await scrape_apply_url(job.apply_url)
 
         if scraped:
             meta["stages_run"].append("regex_scraped")
@@ -319,9 +293,8 @@ async def enrich_job(
                 extracted = provider.extract(job, scraped)
                 filled = _apply_to_job(job, extracted)
                 meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
-
+    Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
     Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
-    breakpoint()
     return meta
 
 async def enrich_jobs_batch(
@@ -372,7 +345,7 @@ if __name__ == "__main__":
 
 
     # Swap provider here —  or GeminiProvider()
-    meta = asyncio.run(enrich_job(job1, provider=GroqProvider(), scrape_if_empty=True))
+    meta = asyncio.run(enrich_job(job1, provider=GroqProvider()))
 
     print("\n=== After ===")
     print(job1)

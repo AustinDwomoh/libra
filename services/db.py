@@ -1,4 +1,4 @@
-from services.config import Config
+from Utils.constants import Config
 import ssl, asyncpg, json
 
 
@@ -15,7 +15,7 @@ class JobDatabase:
         self.pool = pool
 
     @classmethod
-    async def create(cls):
+    async def create(cls) -> "JobDatabase":
         if cls._instance is not None:
             return cls._instance
 
@@ -43,13 +43,13 @@ class JobDatabase:
     async def select(
         self,
         table: str,
-        columns: list = None,
-        filters: dict = None,
-        raw_where: str = None,
-        raw_params: list = None,
+        columns: list = [],
+        filters: dict = {},
+        raw_where: str = '',
+        raw_params: list = [],
         order_by: str = "created_at DESC",
         limit: int = 100,
-    ):
+    )->list[dict]:
         try:
             cols = ", ".join(columns) if columns else "*"
             sql = f"SELECT {cols} FROM {table}"
@@ -85,13 +85,13 @@ class JobDatabase:
     async def selectOne(
         self,
         table: str,
-        columns: list = None,
-        filters: dict = None,
+        columns: list = [],
+        filters: dict = {},
         order_by: str = "created_at DESC",
-    ):
+    ) -> dict:
         try:
             row = await self.select(table, columns=columns, filters=filters, order_by=order_by, limit=1)
-            return row[0] if row else None
+            return row[0] if row else {}
         except Exception as e:
             Config.logger.error(f"Error during selectOne from {table}: {e}")
             raise
@@ -99,7 +99,7 @@ class JobDatabase:
     # -------------------------
     # UPSERT
     # -------------------------
-    async def upsert(self, table: str, data: dict, conflict_column: str | list | None = None):
+    async def upsert(self, table: str, data: dict, conflict_column: str | list | None = None)-> dict:
         try:
             columns = list(data.keys())
             values = [
@@ -119,12 +119,12 @@ class JobDatabase:
             """
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow(sql, *values)
-                return dict(row) if row else None
+                return dict(row) if row else {}
         except Exception as e:
             Config.logger.error(f"Error during upsert to {table}: {e}")
             raise
 
-    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str | list | None = None):
+    async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str | list | None = None)-> list[dict]:
         if not rows:
             return []
 
@@ -158,7 +158,7 @@ class JobDatabase:
             result = await conn.fetch(sql, *values)
             return [dict(r) for r in result]
 
-    async def delete(self, table: str, filters: dict):
+    async def delete(self, table: str, filters: dict)-> list[dict]:
         try:
             where_clause = " AND ".join(
                 f"{k} = ${i+1}" for i, k in enumerate(filters.keys())

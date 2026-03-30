@@ -1,13 +1,11 @@
 from abc import ABC, abstractmethod
-import json, os, re
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
-from dotenv import load_dotenv
-from services.config import Config
-from services.models import Job
+import json,re
+#for when we later want to add a local model option:
+#import os,torch
+#from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
-load_dotenv()
-
+from Utils.constants import Config
+from Utils.models import Job
 _LLM_PROMPT = """Extract structured data from this job posting.
 Return ONLY valid JSON, no markdown, no explanation.
 
@@ -116,7 +114,7 @@ class GroqProvider(LLMProvider):
                 from groq import Groq
             except ImportError:
                 raise ImportError("Run: pip install groq")
-            api_key = os.getenv("GROQ_API_KEY")
+            api_key = Config.GROQ_API_KEY
             if not api_key:
                 raise ValueError("Set GROQ_API_KEY environment variable")
             self._client = Groq(api_key=api_key)
@@ -136,37 +134,37 @@ class GroqProvider(LLMProvider):
 
 
 # ─── Phi-3 (local) ─────────────────────────────────────────────────────────────
-class Phi3Provider(LLMProvider):
-    """
-    Local Microsoft Phi-3-mini via Hugging Face Transformers.
-    Runs fully offline — no API key needed.
-    Requires a CUDA-capable GPU for reasonable speed.
+# class Phi3Provider(LLMProvider):
+#     """
+#     Local Microsoft Phi-3-mini via Hugging Face Transformers.
+#     Runs fully offline — no API key needed.
+#     Requires a CUDA-capable GPU for reasonable speed.
 
-    pip install transformers torch accelerate
-    """
+#     pip install transformers torch accelerate
+#     """
 
-    def __init__(self, model_id: str = "microsoft/Phi-3-mini-4k-instruct"):
-        torch.random.manual_seed(0)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            device_map="cuda",
-            torch_dtype="auto",
-            trust_remote_code=False,  # use transformers' built-in Phi-3 support
-        )
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
-        self._pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-        self._gen_args = {
-            "max_new_tokens": 500,
-            "return_full_text": False,
-            "temperature": 0.0,
-            "do_sample": False,
-        }
+#     def __init__(self, model_id: str = "microsoft/Phi-3-mini-4k-instruct"):
+#         torch.random.manual_seed(0)
+#         model = AutoModelForCausalLM.from_pretrained(
+#             model_id,
+#             device_map="cuda",
+#             torch_dtype="auto",
+#             trust_remote_code=False,  # use transformers' built-in Phi-3 support
+#         )
+#         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
+#         self._pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+#         self._gen_args = {
+#             "max_new_tokens": 500,
+#             "return_full_text": False,
+#             "temperature": 0.0,
+#             "do_sample": False,
+#         }
 
-    def complete(self, prompt: str) -> str:
-        """Wrap the shared prompt in a chat message and return the raw text response."""
-        messages = [
-            {"role": "system", "content": "You are a structured data extraction assistant. Output only valid JSON."},
-            {"role": "user",   "content": prompt},
-        ]
-        output = self._pipe(messages, **self._gen_args)
-        return output[0]["generated_text"].strip()
+#     def complete(self, prompt: str) -> str:
+#         """Wrap the shared prompt in a chat message and return the raw text response."""
+#         messages = [
+#             {"role": "system", "content": "You are a structured data extraction assistant. Output only valid JSON."},
+#             {"role": "user",   "content": prompt},
+#         ]
+#         output = self._pipe(messages, **self._gen_args)
+#         return output[0]["generated_text"].strip()

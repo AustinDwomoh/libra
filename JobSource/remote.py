@@ -1,12 +1,8 @@
-import asyncio
-import json
-
-import requests
+import asyncio,json,requests
 from typing import List, Dict
-from services.config import Config
-from services.constants import Defaults, FilePaths
-from services.models import Job
-from services.db import JobDatabase
+from Services.db import JobDatabase
+from Utils.constants import Defaults, FilePaths,Config
+from Utils.models import Job
 
 class RemoteOKHelper:
     """Helper class for RemoteOK API integration"""
@@ -44,7 +40,7 @@ class RemoteOKHelper:
            Config.logger.error(f"RemoteOK API error: {e}")
            return []
 
-    async def _map_job(self, job: Dict) -> Job|None:
+    async def _map_job(self, job: Dict) -> Job:
         """Map JSearch response to standard job format"""
         compnay_dict = {
             "name": (job.get("company") or "unknown").lower(),
@@ -74,7 +70,8 @@ class RemoteOKHelper:
             njob = Job.from_dict(refined_job, company=company.get("id"))
         except ValueError as e:
             Config.logger.error(f"Error mapping job: {e}")
-            return None  #return empty to avoid breaking the loop, we can filter out invalid jobs later
+            return None #type: ignore  #return empty to avoid breaking the loop, we can filter out invalid jobs later
+                
         return njob  
 
 if __name__ == "__main__":

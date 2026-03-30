@@ -1,5 +1,5 @@
 import requests
-from services.config import Config
+from Utils.constants import Config
 
 def notify_discord(message: str):
     webhook_url = Config.DISCORD_WEBHOOK

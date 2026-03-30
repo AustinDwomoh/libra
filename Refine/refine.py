@@ -7,15 +7,13 @@ Queries the DB for jobs where enriched=false, runs the extractor pipeline
 Never re-calls Groq on a job that has already been enriched.
 """
 
-import asyncio
+import asyncio,uuid
 from typing import Optional
-import uuid
-
-from services.config import Config
-from services.db import JobDatabase
-from services.extractor import enrich_job
-from services.llm import GroqProvider, LLMProvider
-from services.models import Job
+from Utils.constants import Config
+from Services.db import JobDatabase
+from Refine.extractor import enrich_job
+from Refine.llm import GroqProvider, LLMProvider
+from Utils.models import Job
 
 
 # Fields we want Groq to fill. Enrichment is skipped entirely if all are present.
@@ -43,28 +41,13 @@ def _row_to_job(row: dict) -> Job:
     )
 
 
-def _build_update_payload(job: Job) -> dict:
-    """Build the dict of columns to update after enrichment."""
-    tags = job.tags
-    if isinstance(tags, list):
-        tags = {f"tag_{i}": t for i, t in enumerate(tags)}
-    elif not isinstance(tags, dict):
-        tags = {}
 
-    return {
-        "description": job.description or None,
-        "is_remote":   job.is_remote,
-        "role_type":   job.role_type or None,
-        "pay_range":   job.pay_range,   # list → json.dumps handled by db.upsert
-        "tags":        tags,
-        "enriched":    True,
-    }
 
 
 async def enrich_unenriched_jobs(
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
-    batch_size: int = 50,
+    batch_size: int = 30,
     llm_delay: float = 0.5,
 ) -> dict:
     """
@@ -119,12 +102,13 @@ async def enrich_unenriched_jobs(
             continue
 
         try:
+            Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
             meta = await enrich_job(
                 job,
                 provider=provider,
                 use_llm=use_llm,
             )
-            
+            Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
             Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
         except Exception as e:
             Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
@@ -134,8 +118,10 @@ async def enrich_unenriched_jobs(
 
         # Persist enriched fields + set enriched=true
         try:
-            payload = _build_update_payload(job)
-            
+            payload = Job.to_dict_for_db(job)
+            payload["enriched"] = True
+            Config.logger.debug(f"Updating job {job_id}: {payload}")
+
             await db.upsert("job_list", payload, conflict_column="identifier")
             stats["enriched"] += 1
         except Exception as e:
