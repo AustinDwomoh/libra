@@ -10,7 +10,7 @@ name: Libra API CI/CD
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "new_api" ]
 
 jobs:
   deploy:
