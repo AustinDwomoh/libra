@@ -10,7 +10,7 @@ name: Libra API CI/CD
 
 on:
   push:
-    branches: [ "new_api" ]
+    branches: [ "master" ]
 
 jobs:
   deploy:
@@ -36,7 +36,7 @@ jobs:
             source libra/bin/activate
 
             # Pull latest code
-            git pull origin new_api --force
+            git pull origin master --force
 
             # Install/upgrade dependencies
             pip install -r requirements.txt --upgrade-strategy only-if-needed
