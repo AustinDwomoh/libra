@@ -36,7 +36,9 @@ jobs:
             source libra/bin/activate
 
             # Pull latest code
-            git pull origin master --force
+            git fetch origin
+            git reset --hard origin/master
+            
 
             # Install/upgrade dependencies
             pip install -r requirements.txt --upgrade-strategy only-if-needed
