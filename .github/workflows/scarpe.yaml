@@ -27,7 +27,7 @@ jobs:
             set -euo pipefail
             cd /var/www/libra/
             source libra/bin/activate
-            git pull origin main
+            git pull origin master
             pip install -r requirements.txt --upgrade-strategy only-if-needed
             PYTHONPATH=/var/www/libra python3 Tasks/scrape.py > logs/scrape.log 2>&1
 
