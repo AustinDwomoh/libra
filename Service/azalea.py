@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 from uuid import UUID
 from JobSource.remote import RemoteOKHelper
 from Utils.models import Job, JobStats
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 from JobSource.jsearch import JSearch
 from Refine.refine import enrich_unenriched_jobs
 from JobSource.simplify import Simplify
