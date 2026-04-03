@@ -10,7 +10,7 @@ Never re-calls Groq on a job that has already been enriched.
 import asyncio,uuid
 from typing import Optional
 from Utils.constants import Config
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 from Refine.extractor import enrich_job
 from Refine.llm import GroqProvider, LLMProvider
 from Utils.models import Job
