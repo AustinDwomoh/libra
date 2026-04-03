@@ -25,11 +25,19 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -euo pipefail
+
+            if [ ! -d /var/www/libra ]; then
+              echo "Directory /var/www/libra does not exist, skipping."
+              exit 0
+            fi
+
             cd /var/www/libra/
             source libra/bin/activate
             git fetch origin
             git reset --hard origin/master
-            
+
+            mkdir -p logs
+
             pip install -r requirements.txt --upgrade-strategy only-if-needed
             PYTHONPATH=/var/www/libra python3 Tasks/scrape.py > logs/scrape.log 2>&1
 
@@ -57,8 +65,17 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             set -euo pipefail
+
+            if [ ! -d /var/www/libra ]; then
+              echo "Directory /var/www/libra does not exist, skipping."
+              exit 0
+            fi
+
             cd /var/www/libra/
             source libra/bin/activate
+
+            mkdir -p logs
+
             PYTHONPATH=/var/www/libra python3 Tasks/enrich.py > logs/enrich.log 2>&1
 
       - name: Notify Discord on failure
