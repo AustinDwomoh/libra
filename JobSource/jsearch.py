@@ -6,7 +6,7 @@ from typing import List, Dict
 import requests,json,time
 from Utils.models import Job
 from Utils.constants import PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 
 
 

@@ -1,6 +1,6 @@
 import asyncio,json,requests
 from typing import List, Dict
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 from Utils.constants import Defaults, FilePaths,Config
 from Utils.models import Job
 

@@ -3,7 +3,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 
 
 @asynccontextmanager

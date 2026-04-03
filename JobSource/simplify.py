@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from Utils.models import Job
 from Utils.constants import JobSource, SimplifyConfig, Defaults, FilePaths, Config
-from Services.db import JobDatabase
+from Service.db import JobDatabase
 
 logger = Config.logger
 

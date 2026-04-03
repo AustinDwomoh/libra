@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional, List
 from collections import Counter
 import requests
-from services.config import Config
+from service.config import Config
 import logging
 
 logger = logging.getLogger(__name__)

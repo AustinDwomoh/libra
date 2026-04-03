@@ -4,7 +4,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from Services.azalea import Azalea
+from Service.azalea import Azalea
 from Utils.constants import PositionType
 
 async def main():
