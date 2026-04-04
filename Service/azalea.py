@@ -184,8 +184,8 @@ class Azalea:
         position_type: PositionType = PositionType.INTERN,
         save_json: bool = True,
         jsearch_queries: Optional[List[str]] = None,
-        enrich: bool = True,
-        enrich_batch_size: int = 50,
+        #enrich: bool = True,
+        #enrich_batch_size: int = 50,
         test: bool = False,  # ← when True, skips fetch/dedup and loads from JSON
     ) -> Dict:
         """Main orchestration method"""
@@ -250,10 +250,12 @@ class Azalea:
             )
 
             # ── Step 5: Enrich unenriched jobs via Groq ──────────────────────
-            if enrich:
-                self._log_section("ENRICHING JOBS (Groq)")
-                enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
-                Config.logger.info(f"Enrichment stats: {enrich_stats}")
+            #if enrich:
+            #    self._log_section("ENRICHING JOBS (Groq)")
+            #    enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
+            #    Config.logger.info(f"Enrichment stats: {enrich_stats}")
+            #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
+            # the task/ will take care of actaully calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
 
             self.print_summary()
             return self.stats.to_dict()

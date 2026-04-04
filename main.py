@@ -11,6 +11,7 @@ async def lifespan(app: FastAPI):
     """Initialize the DB connection pool once at startup and reuse it across requests."""
     app.state.db = await JobDatabase.create()
     yield
+    await app.state.db.pool.close()
 
 
 app = FastAPI(
