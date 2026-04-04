@@ -47,7 +47,7 @@ def _row_to_job(row: dict) -> Job:
 async def enrich_unenriched_jobs(
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
-    batch_size: int = 30,
+    batch_size: int = 20,
     llm_delay: float = 0.5,
 ) -> dict:
     """

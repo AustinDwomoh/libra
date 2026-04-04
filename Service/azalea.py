@@ -158,27 +158,7 @@ class Azalea:
 
         Config.logger.info("=" * 60)
 
-    def build_discord_message(self, mention_user_id: Optional[str] = None) -> str:
-        """Build Discord notification message"""
-        lines = []
-
-        if mention_user_id:
-            lines.append(f"<@{mention_user_id}>")
-
-        lines.extend(
-            [
-                "📢 **Libra Job Scraper Report**",
-                "📊 **Job Statistics**",
-                f"  • Total fetched: {self.stats.total_fetched} jobs",
-                f"  • After deduplication: {self.stats.unique_jobs} jobs",
-                f"  • Inserted to DB: {self.stats.inserted} jobs",
-                "",
-                "✅ Completed successfully!",
-            ]
-        )
-
-        return "\n".join(lines)
-
+ 
     async def run(
         self,
         position_type: PositionType = PositionType.INTERN,
@@ -256,8 +236,16 @@ class Azalea:
             #    Config.logger.info(f"Enrichment stats: {enrich_stats}")
             #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
             # the task/ will take care of actaully calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
-
-            self.print_summary()
+            if test:
+                 # ── Step 5: Enrich unenriched jobs via Groq ──────────────────────
+                
+                self._log_section("ENRICHING JOBS (Groq)")
+                enrich_stats = await enrich_unenriched_jobs(batch_size=20)
+                Config.logger.info(f"Enrichment stats: {enrich_stats}")
+                self._log_section("ENRICHING JOBS (Groq)")
+                enrich_stats = await enrich_unenriched_jobs(batch_size=5)
+                Config.logger.info(f"Enrichment stats: {enrich_stats}")
+                self.print_summary()
             return self.stats.to_dict()
 
         except Exception as e:
@@ -273,11 +261,6 @@ def main():
 
     try:
         asyncio.run(orchestrator.run(position_type=PositionType.INTERN, save_json=True))
-
-        message = orchestrator.build_discord_message(
-            mention_user_id="755872891601551511"
-        )
-        #notify_discord(message)
 
     except Exception as e:
         err_msg = f"❌ Libra scraper failed:\n```{str(e)}```"

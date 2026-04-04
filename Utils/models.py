@@ -1,4 +1,5 @@
 from dataclasses import dataclass, field
+import datetime
 from typing import Optional,Dict
 from Utils.constants import PositionType, JobSource, StatsKeys
 
@@ -187,3 +188,38 @@ class Job:
 
     def __hash__(self):
         return hash((self.title, self.company, self.location, self.apply_url))
+    
+    @staticmethod
+    def build_job_embed(job: dict) -> dict:
+        tags = job.get("tags") or {}
+            
+        badges = []
+        if job.get("is_remote"):
+            badges.append("🌐 Remote")
+
+
+        description = ""
+        if badges:
+            description += "  ".join(f"`{b}`" for b in badges) + "\n\n"
+        if job.get("description"):
+            excerpt = job["description"][:300].rsplit(" ", 1)[0] + "..."
+            description += excerpt
+
+        fields = [
+            {"name": "📍 Location",  "value": job.get("location") or "Unknown",    "inline": True},
+            {"name": "💼 Role type", "value": job.get("role_type") or "Other",     "inline": True},
+            {"name": "💰 Pay range", "value": job.get("pay_range") or "Not listed","inline": True},
+            {"name": "🔗 Source",    "value": job.get("source") or "Unknown",      "inline": True},
+        ]
+
+        return {
+            "embeds": [{
+                "title": job.get("title") or "Unknown role",
+                "description": description,
+                "color": 0x5865F2,
+                "fields": fields,
+                "url": job.get("apply_url") or "",
+                "footer": {"text": "Libra • Job Scraper"},
+                
+            }]
+        }

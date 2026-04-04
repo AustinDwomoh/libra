@@ -48,39 +48,39 @@ jobs:
           -d "{\"content\": \":x: <@755872891601551511>\nLibra **scrape** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
 
-  enrich:
-    name: Enrich Jobs
-    runs-on: ubuntu-latest
-    needs: scrape
-    if: github.event.schedule == '0 5 * * *' || github.event_name == 'workflow_dispatch'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # enrich:
+  #   name: Enrich Jobs
+  #   runs-on: ubuntu-latest
+  #   needs: scrape
+  #   if: github.event.schedule == '0 5 * * *' || github.event_name == 'workflow_dispatch'
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Run enrichment via SSH
-        uses: appleboy/ssh-action@v0.1.7
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          script: |
-            set -euo pipefail
+  #     - name: Run enrichment via SSH
+  #       uses: appleboy/ssh-action@v0.1.7
+  #       with:
+  #         host: ${{ secrets.SSH_HOST }}
+  #         username: ${{ secrets.SSH_USER }}
+  #         key: ${{ secrets.SSH_PRIVATE_KEY }}
+  #         script: |
+  #           set -euo pipefail
 
-            if [ ! -d /var/www/libra ]; then
-              echo "Directory /var/www/libra does not exist, skipping."
-              exit 0
-            fi
+  #           if [ ! -d /var/www/libra ]; then
+  #             echo "Directory /var/www/libra does not exist, skipping."
+  #             exit 0
+  #           fi
 
-            cd /var/www/libra/
-            source libra/bin/activate
+  #           cd /var/www/libra/
+  #           source libra/bin/activate
 
-            mkdir -p logs
+  #           mkdir -p logs
 
-            PYTHONPATH=/var/www/libra python3 Tasks/enrich.py > logs/enrich.log 2>&1
+  #           PYTHONPATH=/var/www/libra python3 Tasks/enrich.py > logs/enrich.log 2>&1
 
-      - name: Notify Discord on failure
-        if: failure()
-        run: |
-          curl -H "Content-Type: application/json" \
-          -d "{\"content\": \":x: <@755872891601551511>\nLibra **enrich** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
-          ${{ secrets.DISCORD_WEBHOOK }}
+  #     - name: Notify Discord on failure
+  #       if: failure()
+  #       run: |
+  #         curl -H "Content-Type: application/json" \
+  #         -d "{\"content\": \":x: <@755872891601551511>\nLibra **enrich** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+  #         ${{ secrets.DISCORD_WEBHOOK }}
