@@ -16,7 +16,7 @@ async def main():
     notify_discord("Enrichment process completed successfully.", file_path="logs/enrich.log")
     db = await JobDatabase.create()
     columns = [ "title", "location", "is_remote", "description", "apply_url", "role_type", "pay_range", "source", "tags"]
-    job_list = await db.select(table="job_list",columns=columns,filters={'enriched': True}, limit=10,order_by="updated_at DESC")
+    job_list = await db.select(table="job_list",columns=columns, limit=10,order_by="updated_at DESC")
     webhook_url = Config.DISCORD_WEBHOOK
     if not webhook_url:
         return

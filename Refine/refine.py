@@ -122,7 +122,7 @@ async def enrich_unenriched_jobs(
             payload["enriched"] = True
             Config.logger.debug(f"Updating job {job_id}: {payload}")
 
-            await db.upsert("job_list", payload, conflict_column="identifier")
+            await db.upsert("job_list", payload, conflict_column=["title", "company", "apply_url"])
             stats["enriched"] += 1
         except Exception as e:
             Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
@@ -148,4 +148,4 @@ async def _mark_enriched(db: JobDatabase, job_id: uuid.UUID):
     "enriched": True,
     "id": job_id,
     }
-    await db.upsert("job_list", data, conflict_column="id")
+    await db.upsert("job_list", data, conflict_column=["title", "company", "apply_url"])

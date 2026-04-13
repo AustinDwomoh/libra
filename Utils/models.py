@@ -173,7 +173,6 @@ class Job:
             "pay_range": job.pay_range,
             "source": job.source,
             "tags": tags,
-            "identifier": job.__hash__(),
         }
 
     def __eq__(self, other):

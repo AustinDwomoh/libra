@@ -222,7 +222,7 @@ class Azalea:
             self._log_section("SAVING TO DATABASE")
             db = await JobDatabase.create()
             inserted = await db.bulk_upsert(
-                "job_list", list_jobs, conflict_column="identifier"
+                "job_list", list_jobs, conflict_column=["title", "company", "apply_url"]
             )
             self.stats.inserted = len(inserted)
             Config.logger.info(
