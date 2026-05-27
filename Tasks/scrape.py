@@ -2,10 +2,9 @@ import asyncio
 import sys
 import os
 
-from Utils.notify import notify_discord
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from Utils.notify import notify_discord
 from Service.azalea import Azalea
 from Utils.constants import PositionType
 

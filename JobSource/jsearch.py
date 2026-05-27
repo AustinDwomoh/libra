@@ -3,7 +3,7 @@ jsearch.py - Refactored with constants
 """
 import asyncio
 from typing import List, Dict
-import requests,json,time
+import requests,json
 from Utils.models import Job
 from Utils.constants import PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
 from Service.db import JobDatabase
@@ -74,7 +74,7 @@ class JSearch:
         self.request_count += 1
         return response
 
-    def _handle_response_status(
+    async def _handle_response_status(
         self,
         response: requests.Response,
         attempt: int,
@@ -94,7 +94,7 @@ class JSearch:
             Config.logger.warning(
                 f"JSearch: Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})"
             )
-            time.sleep(wait_time)
+            await asyncio.sleep(wait_time)
             return False
 
         response.raise_for_status()
@@ -121,8 +121,13 @@ class JSearch:
 
     def _save_raw_jobs(self, jobs: List[Dict]) -> None:
         """Save raw job data for debugging"""
-        with open(FilePaths.JSEARCH_RAW_JOBS, "w", encoding="utf-8") as f:
-            json.dump(jobs, f, ensure_ascii=False, indent=4)
+        try:
+            import os
+            os.makedirs(os.path.dirname(FilePaths.JSEARCH_RAW_JOBS), exist_ok=True)
+            with open(FilePaths.JSEARCH_RAW_JOBS, "w", encoding="utf-8") as f:
+                json.dump(jobs, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            Config.logger.warning(f"Could not save raw JSearch jobs: {e}")
 
     # ============================================================================ #
     #                          POSITION TYPE HELPERS                               #
@@ -264,7 +269,7 @@ class JSearch:
                 response = self._make_request(params)
                 
                 
-                if not self._handle_response_status(response, attempt, retry_count):
+                if not await self._handle_response_status(response, attempt, retry_count):
                     return []
                 
                 return await self._process_response(response, search_query)
@@ -272,7 +277,7 @@ class JSearch:
             except requests.RequestException as e:
                 Config.logger.error(f"JSearch API error: {e}")
                 if attempt < retry_count - 1:
-                    time.sleep(JSearchConfig.RETRY_DELAY)
+                    await asyncio.sleep(JSearchConfig.RETRY_DELAY)
                     continue
                 return []
 

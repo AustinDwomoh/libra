@@ -208,15 +208,22 @@ class Azalea:
             else:
                 # ── TEST MODE: skip fetch/dedup, load directly from JSON ─────
                 Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
-                with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
-                    list_jobs = json.load(f)[:20]  # type: ignore
-                    for job_dict in list_jobs:
-                        try:
-                            company_id = UUID(job_dict.get("company", None))
-                            job = Job.from_dict(job_dict, company=company_id)
-                            self.jobs.append(job)
-                        except Exception as e:
-                            Config.logger.error(f"Error loading job from JSON: {e}")
+                try:
+                    with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
+                        list_jobs = json.load(f)[:20]  # type: ignore
+                        for job_dict in list_jobs:
+                            try:
+                                company_id = UUID(job_dict.get("company", None))
+                                job = Job.from_dict(job_dict, company=company_id)
+                                self.jobs.append(job)
+                            except Exception as e:
+                                Config.logger.error(f"Error loading job from JSON: {e}")
+                except FileNotFoundError:
+                    Config.logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} not found — run without test=True first")
+                    return self.stats.to_dict()
+                except json.JSONDecodeError as e:
+                    Config.logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} contains invalid JSON: {e}")
+                    return self.stats.to_dict()
 
             # ── Step 4: Insert to DB ─────────────────────────────────────────
             self._log_section("SAVING TO DATABASE")
@@ -237,13 +244,8 @@ class Azalea:
             #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
             # the task/ will take care of actaully calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
             if test:
-                 # ── Step 5: Enrich unenriched jobs via Groq ──────────────────────
-                
                 self._log_section("ENRICHING JOBS (Groq)")
                 enrich_stats = await enrich_unenriched_jobs(batch_size=20)
-                Config.logger.info(f"Enrichment stats: {enrich_stats}")
-                self._log_section("ENRICHING JOBS (Groq)")
-                enrich_stats = await enrich_unenriched_jobs(batch_size=5)
                 Config.logger.info(f"Enrichment stats: {enrich_stats}")
                 self.print_summary()
             return self.stats.to_dict()

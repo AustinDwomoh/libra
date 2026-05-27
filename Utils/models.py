@@ -109,7 +109,10 @@ class Job:
         min_sal, max_sal = self.pay_range[0], self.pay_range[1]
         if min_sal is None and max_sal is None:
             return "Not specified"
-        return f"${min_sal:,} - ${max_sal:,}"
+        if min_sal is not None and max_sal is not None:
+            return f"${min_sal:,} - ${max_sal:,}"
+        val = min_sal if min_sal is not None else max_sal
+        return f"${val:,}+"
 
     @classmethod
     def from_dict(cls, job: dict, company: uuid.UUID|None) -> "Job":

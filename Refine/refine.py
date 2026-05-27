@@ -144,8 +144,4 @@ async def enrich_unenriched_jobs(
 
 async def _mark_enriched(db: JobDatabase, job_id: uuid.UUID):
     """Mark a job as enriched without changing other fields."""
-    data = {
-    "enriched": True,
-    "id": job_id,
-    }
-    await db.upsert("job_list", data, conflict_column=["title", "company", "apply_url"])
+    await db.update("job_list", data={"enriched": True}, filters={"id": job_id})

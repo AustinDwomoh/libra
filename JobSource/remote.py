@@ -29,7 +29,7 @@ class RemoteOKHelper:
             )
             response.raise_for_status()
             raw_jobs = response.json()
-            jobs = response.json()[1:]  # Skip metadata at index 0
+            jobs = raw_jobs[1:]  # Skip metadata at index 0
             relevant_jobs = [
                await self._map_job(job) for job in jobs if job is not None    ]
     
@@ -53,7 +53,7 @@ class RemoteOKHelper:
        
 
         refined_job = {
-            "title": job.get("position").lower(), # type: ignore
+            "title": (job.get("position") or "unknown").lower(),
             "location": job.get("location") or Defaults.LOCATION_NOT_SPECIFIED,
             "is_remote": job.get("remote", True),  # RemoteOK only lists remote jobs
             "description": job.get("description", ""),

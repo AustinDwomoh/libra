@@ -125,38 +125,55 @@ class JobDatabase:
             raise
 
     async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str | list | None = None)-> list[dict]:
-        if not rows:
-            return []
+        try:
+            if not rows:
+                return []
 
-        columns = list(rows[0].keys())
-        cols = ", ".join(columns)
+            columns = list(rows[0].keys())
+            cols = ", ".join(columns)
 
-        _, on_conflict = self._build_conflict_clause(columns, conflict_column, table)
+            _, on_conflict = self._build_conflict_clause(columns, conflict_column, table)
 
-        values = []
-        placeholder_groups = []
-        param_index = 1
+            values = []
+            placeholder_groups = []
+            param_index = 1
 
-        for row in rows:
-            group = []
-            for col in columns:
-                val = row[col]
-                values.append(json.dumps(val) if isinstance(val, (dict, list)) else val)
-                group.append(f"${param_index}")
-                param_index += 1
-            placeholder_groups.append(f"({', '.join(group)})")
+            for row in rows:
+                group = []
+                for col in columns:
+                    val = row[col]
+                    values.append(json.dumps(val) if isinstance(val, (dict, list)) else val)
+                    group.append(f"${param_index}")
+                    param_index += 1
+                placeholder_groups.append(f"({', '.join(group)})")
 
-        placeholders = ", ".join(placeholder_groups)
+            placeholders = ", ".join(placeholder_groups)
 
-        sql = f"""
-            INSERT INTO {table} ({cols})
-            VALUES {placeholders}
-            {on_conflict}
-            RETURNING *;
-        """
-        async with self.pool.acquire() as conn:
-            result = await conn.fetch(sql, *values)
-            return [dict(r) for r in result]
+            sql = f"""
+                INSERT INTO {table} ({cols})
+                VALUES {placeholders}
+                {on_conflict}
+                RETURNING *;
+            """
+            async with self.pool.acquire() as conn:
+                result = await conn.fetch(sql, *values)
+                return [dict(r) for r in result]
+        except Exception as e:
+            Config.logger.error(f"Error during bulk_upsert to {table}: {e}")
+            raise
+
+    async def update(self, table: str, data: dict, filters: dict) -> dict:
+        try:
+            set_clause = ", ".join(f"{k} = ${i+1}" for i, k in enumerate(data.keys()))
+            where_clause = " AND ".join(f"{k} = ${len(data)+i+1}" for i, k in enumerate(filters.keys()))
+            sql = f"UPDATE {table} SET {set_clause} WHERE {where_clause} RETURNING *;"
+            all_params = list(data.values()) + list(filters.values())
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(sql, *all_params)
+                return dict(row) if row else {}
+        except Exception as e:
+            Config.logger.error(f"Error during update to {table}: {e}")
+            raise
 
     async def delete(self, table: str, filters: dict)-> list[dict]:
         try:
