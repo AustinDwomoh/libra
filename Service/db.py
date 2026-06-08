@@ -205,6 +205,18 @@ class JobDatabase:
             raise
 
     # ----------------------------------------------------
+    #  RAW QUERY
+    # ----------------------------------------------------
+    async def raw(self, sql: str, params: list = []) -> list[dict]:
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+                return [dict(r) for r in rows]
+        except Exception as e:
+            Config.logger.error(f"Error during raw query: {e}")
+            raise
+
+    # ----------------------------------------------------
     #  CONFLICT CLAUSE BUILDER
     # ----------------------------------------------------
     def _build_conflict_clause(

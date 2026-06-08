@@ -1,18 +1,15 @@
-"""
-jsearch.py - Refactored with constants
-"""
 import asyncio
-from typing import List, Dict
+import os
+from typing import List, Dict, Optional
 import requests,json
 from Utils.models import Job
-from Utils.constants import PositionType,JSearchConfig, HTTPStatus, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
-from Service.db import JobDatabase
+from Utils.constants import PositionType,JSearchConfig, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
+from JobSource.base import JobSourceBase
 
 
-
-class JSearch:
+class JSearch(JobSourceBase):
     """Helper class for JSearch API integration via OpenWebNinja
-    
+
     This class handles all interactions with the JSearch API, including:
     - Building search queries based on position type
     - Making HTTP requests with proper headers and parameters
@@ -21,12 +18,12 @@ class JSearch:
     """
 
     def __init__(self):
+        super().__init__()
         self.api_key = Config.J_SEARCH_API_KEY
         if not self.api_key:
             raise ValueError("JSearch API key not configured. Set the J_SEARCH_API_KEY environment variable.")
 
         self.headers = {"X-API-Key": self.api_key}
-        self.seen_jobs = set()
         self.request_count = 0
 
     # ============================================================================ #
@@ -64,65 +61,20 @@ class JSearch:
     # ============================================================================ #
 
     def _make_request(self, params: Dict) -> requests.Response:
-        """Make HTTP request to JSearch API"""
-        response = requests.get(
-            Config.JSEARCH_API_URL,
-            headers=self.headers,
-            params=params,
-            timeout=Config.REQUEST_TIMEOUT,
-        )
+        response = self._fetch(Config.JSEARCH_API_URL, headers=self.headers, params=params)
         self.request_count += 1
         return response
 
-    async def _handle_response_status(
-        self,
-        response: requests.Response,
-        attempt: int,
-        retry_count: int,
-    ) -> bool:
-        """Handle HTTP response status codes. Returns True if processing should continue."""
-        if response.status_code == HTTPStatus.FORBIDDEN:
-            Config.logger.error("JSearch: 403 Forbidden - Check your API key")
-            return False
-
-        if response.status_code == HTTPStatus.UNAUTHORIZED:
-            Config.logger.error("JSearch: 401 Unauthorized - Invalid API key")
-            return False
-
-        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS:
-            wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
-            Config.logger.warning(
-                f"JSearch: Rate limit hit. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})"
-            )
-            await asyncio.sleep(wait_time)
-            return False
-
-        response.raise_for_status()
-        return True
-
-    async def _process_response(
-        self,
-        response: requests.Response,
-        search_query: str,
-    ) -> List[Job]:
-        """Process API response and filter jobs"""
-       
+    async def _process_response(self, response: requests.Response, search_query: str) -> List[Job]:
         data = response.json()
-        jobs = data.get("data", []) or data
-        
-
-        Config.logger.debug(f"Jobs found: {len(jobs)}")
-        
-        self._save_raw_jobs(jobs)
-
+        jobs = data.get("data") if data.get("data") is not None else data
         Config.logger.info(LogMessages.jobs_found(len(jobs), search_query))
-
-        return [await self._map_job(job) for job in jobs]
+        self._save_raw_jobs(jobs)
+        return await self._map_jobs(jobs)
 
     def _save_raw_jobs(self, jobs: List[Dict]) -> None:
         """Save raw job data for debugging"""
         try:
-            import os
             os.makedirs(os.path.dirname(FilePaths.JSEARCH_RAW_JOBS), exist_ok=True)
             with open(FilePaths.JSEARCH_RAW_JOBS, "w", encoding="utf-8") as f:
                 json.dump(jobs, f, ensure_ascii=False, indent=4)
@@ -150,36 +102,12 @@ class JSearch:
             return PositionType.FULLTIME
         return PositionType.OTHER
 
-    def _matches_position_type(self, employment_types: List[str], position_type: PositionType) -> bool:
-        """Check whether a job's employment types satisfy the requested position type filter."""
-        actual = self._get_position_type(employment_types)
-
-        if position_type == PositionType.HYBRID:
-            # Hybrid filter accepts intern, fulltime, or hybrid jobs
-            return actual in (
-                PositionType.INTERN,
-                PositionType.FULLTIME,
-                PositionType.HYBRID,
-            )
-        return actual == position_type
-
-    # ============================================================================ #
-    #                           FILTERING / MAPPING                                #
-    # ============================================================================ #
-
-
-
     async def _map_job(self, job: Dict) -> Job:
         """Map JSearch response to standard job format"""
-        compnay_dict = {
-            "name": (job.get("employer_name") or "unknown").lower(),
-            "company_url": job.get("employer_website")
-        }
-        DB = await JobDatabase.create()
-
-        company = await DB.upsert(table="company",data = compnay_dict)  # Upsert company and get the record with ID
-        if not company:
-            company = await DB.selectOne(table="company", filters={"name": compnay_dict["name"]})
+        company = await self._upsert_company(
+            job.get("employer_name") or "unknown",
+            company_url=job.get("employer_website"),
+        )
        
         employment_types = job.get("job_employment_types", [])
         refined_job = {
@@ -194,13 +122,13 @@ class JSearch:
             "tags": job.get("job_highlights"),
         }
    
-        return Job.from_dict(refined_job, company=company.get("id")) #type: ignore might be None but will raise in that case, which is fine
+        return self._make_job(refined_job, company)
 
     def _extract_salary(self, job: Dict):
         """Extract salary range from job data"""
         min_sal = job.get("job_min_salary")
         max_sal = job.get("job_max_salary")
-        return[min_sal, max_sal] if min_sal and max_sal else None
+        return [min_sal, max_sal] if min_sal and max_sal else None
 
  
 
@@ -208,7 +136,7 @@ class JSearch:
     #                                 FETCH FNS                                    #
     # ============================================================================ #
 
-    async def fetch_jobs( self, queries: List[str] = [], position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY,) -> List[Job]:
+    async def fetch_jobs(self, queries: Optional[List[str]] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY) -> List[Job]:
         """
         Fetch jobs across multiple search queries with rate limiting.
 
@@ -227,7 +155,6 @@ class JSearch:
         """
         queries = queries or JSearchConfig.DEFAULT_CATEGORIES
         all_jobs = []
-        self.seen_jobs.clear()
 
         for i, query in enumerate(queries):
             Config.logger.info(f"JSearch: Query {i + 1}/{len(queries)}")
@@ -243,7 +170,7 @@ class JSearch:
         Config.logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
         return unique_jobs
 
-    async  def fetch_positions( self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT,) -> List[Job]:
+    async def fetch_positions(self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT) -> List[Job]:
         """
         Fetch a single page of positions from the JSearch API.
 
@@ -267,11 +194,18 @@ class JSearch:
         for attempt in range(retry_count):
             try:
                 response = self._make_request(params)
-                
-                
-                if not await self._handle_response_status(response, attempt, retry_count):
+
+                if response.status_code in (401, 403):
+                    Config.logger.error(f"JSearch: {response.status_code} - check your API key")
                     return []
-                
+
+                if response.status_code == 429:
+                    wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
+                    Config.logger.warning(f"JSearch: Rate limited. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})")
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                response.raise_for_status()
                 return await self._process_response(response, search_query)
 
             except requests.RequestException as e:
@@ -288,7 +222,7 @@ class JSearch:
 async def main():
     jsearch_helper = JSearch()
     jobs = await jsearch_helper.fetch_jobs( position_type=PositionType.INTERN, date_posted=DatePosted.WEEK )
-    jobs = [job.to_dict(job) for job in jobs]  # Convert Job objects to dicts for JSON serialization
+    jobs = [Job.to_dict(job) for job in jobs]
     print(f"Total unique jobs fetched: {len(jobs)}")
     with open(FilePaths.JSEARCH_JOBS, 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)

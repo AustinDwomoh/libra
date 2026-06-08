@@ -140,9 +140,8 @@ class Job:
             tags=job.get("tags", {}),
         )
 
-    @classmethod
-    def to_dict(cls, job: "Job") -> dict:
-        
+    @staticmethod
+    def to_dict(job: "Job") -> dict:
         return {
             "title": job.title,
             "company": str(job.company) if job.company else None,
@@ -156,8 +155,8 @@ class Job:
             "tags": job.tags,
         }
 
-    @classmethod
-    def to_dict_for_db(cls, job: "Job") -> dict:
+    @staticmethod
+    def to_dict_for_db(job: "Job") -> dict:
         """Convert a Job instance into a dict suitable for database insertion."""
         tags = job.tags
         if isinstance(tags, list):

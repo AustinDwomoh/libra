@@ -6,15 +6,16 @@ from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 from Utils.models import Job
 from Utils.constants import JobSource, SimplifyConfig, Defaults, FilePaths, Config
-from Service.db import JobDatabase
+from JobSource.base import JobSourceBase
 
 logger = Config.logger
 
 
-class Simplify:
+class Simplify(JobSourceBase):
     """Helper class for scraping Simplify GitHub README"""
-    
+
     def __init__(self, url: Optional[str] = None):
+        super().__init__()
         self.url = url or Config.DEFAULT_URL
         self.readme_text: Optional[str] = None
         self.jobs_found: int = 0
@@ -23,26 +24,16 @@ class Simplify:
     def fetch_readme(self) -> str:
         """Fetch README content from Simplify GitHub"""
         logger.info(f"Simplify: Fetching README from {self.url}...")
-        
         try:
-            resp = requests.get(self.url, timeout=Config.REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            
+            resp = self._fetch(self.url)
             self.readme_text = resp.text
-            logger.info(
-                f"Simplify: Successfully fetched README "
-                f"({len(self.readme_text)} characters)"
-            )
+            logger.info(f"Simplify: Successfully fetched README ({len(self.readme_text)} characters)")
             return self.readme_text
-            
-        except requests.Timeout:
-            logger.error("Simplify: Request timed out")
-            raise
         except requests.RequestException as e:
             logger.error(f"Simplify: Failed to fetch README: {e}")
             raise
     
-    def clean_company_name(self, name: str) -> str:
+    def _clean_company_name(self, name: str) -> str:
         """Clean and normalize company name by removing emojis and extra spaces"""
         no_emoji = emoji.replace_emoji(name, replace='')
         return no_emoji.strip().lower()
@@ -66,7 +57,6 @@ class Simplify:
             jobs = await self._parse_single_table(table, table_idx)
             all_jobs.extend(jobs)
             self.tables_processed += 1
-        
         self.jobs_found = len(all_jobs)
         logger.info(f"Simplify: Parsed {self.jobs_found} valid job entries")
         
@@ -90,7 +80,7 @@ class Simplify:
             if not current_company:
                 continue
             
-            job = await self._extract_job_from_row(tds, current_company)
+            job = await self._map_job(tds, current_company)
             
             if job.is_valid():
                 jobs.append(job)
@@ -119,21 +109,14 @@ class Simplify:
         
         # Check if this is a continuation row
         if first_col_text and first_col_text != SimplifyConfig.CONTINUATION_MARKER:
-            return self.clean_company_name(first_col_text)
+            return self._clean_company_name(first_col_text)
         
         return current_company
     
-    async def _extract_job_from_row(self, tds, company: str) -> Job:
+    async def _map_job(self, tds, company: str) -> Job:
         """Extract job information from a table row"""
-        compnay_dict = {
-            "name": company.lower()
-        }
-        DB = await JobDatabase.create()
-        compnay_dict = await DB.upsert(table="company",data = compnay_dict,conflict_column="name")  # Upsert company and get the record with ID
-        if not compnay_dict:
-            compnay_dict = await DB.selectOne(table="company", filters={"name": company.lower()})
+        company_dict = await self._upsert_company(company)
         
-        #employment_types = job.get("job_employment_types", [])
         refined_job = {
             "title": self._extract_title(tds).lower(),
             "location": self._extract_location(tds) or Defaults.LOCATION_NOT_SPECIFIED,
@@ -147,7 +130,7 @@ class Simplify:
 
 
         }
-        return Job.from_dict(refined_job, company=compnay_dict.get("id"))
+        return self._make_job(refined_job, company_dict)
         
     
     def _extract_title(self, tds) -> str:
@@ -234,17 +217,10 @@ class Simplify:
         }
 
 
-# Utility functions
-def clean_company_name(name: str) -> str:
-    """Standalone utility to clean company names"""
-    no_emoji = emoji.replace_emoji(name, replace='')
-    return no_emoji.strip().lower()
-
-
 if __name__ == "__main__":
     helper = Simplify()
     jobs = asyncio.run(helper.fetch_jobs())
-    jobs = [job.to_dict(job) for job in jobs]
+    jobs = [Job.to_dict(job) for job in jobs]
     with open(FilePaths.SCRAPED_JOBS_JSON, "w") as f:
         json.dump(jobs, f, indent=2)
     stats = helper.get_stats()
