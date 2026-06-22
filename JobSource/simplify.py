@@ -38,8 +38,6 @@ class Simplify(JobSourceBase):
         no_emoji = emoji.replace_emoji(name, replace='')
         return no_emoji.strip().lower()
     
-
-    
     async def parse_tables(self) -> List[Job]:
         """Parse HTML tables to extract job information from Simplify"""
         logger.info("Simplify: Parsing job tables...")
@@ -188,8 +186,6 @@ class Simplify(JobSourceBase):
                 return True
         
         return False
-    
-    
     
     async def fetch_jobs(self) -> List[Job]:
         """

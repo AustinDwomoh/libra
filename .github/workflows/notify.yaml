@@ -1,0 +1,54 @@
+# =========================================
+# GitHub Actions Workflow: Libra CI/CD
+# Deploys Discord API via SSH + systemd
+# Features:
+#   - Notify Discord of commit changes
+#   - Notify Discord on new issues
+# =========================================
+name: Libra API CI/CD
+
+on:
+  push:
+    branches:
+      - '**'
+  issues:
+    types: [opened, reopened]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Discord on push (failure)
+        if: failure() && github.event_name == 'push'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{
+            \"content\": \":x: <@755872891601551511>\n**Deploy Failed**\n**Repo:** ${{ github.repository }}\n**Branch:** ${{ github.ref_name }}\n**Commit:** ${{ github.sha }}\n**Message:** ${{ github.event.head_commit.message }}\n**Author:** ${{ github.event.head_commit.author.name }}\"
+          }" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Notify Discord on push (success)
+        if: success() && github.event_name == 'push'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{
+            \"content\": \":white_check_mark: <@755872891601551511>\n**Deploy Successful**\n**Repo:** ${{ github.repository }}\n**Branch:** ${{ github.ref_name }}\n**Commit:** [\`${{ github.sha }}\`](${{ github.event.head_commit.url }})\n**Message:** ${{ github.event.head_commit.message }}\n**Author:** ${{ github.event.head_commit.author.name }}\"
+          }" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Notify Discord on new issue
+        if: github.event_name == 'issues'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{
+            \"content\": \":bug: <@755872891601551511>\n**New Issue Opened**\n**Repo:** ${{ github.repository }}\n**Title:** ${{ github.event.issue.title }}\n**By:** ${{ github.event.issue.user.login }}\n**Link:** ${{ github.event.issue.html_url }}\"
+          }" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+      - name: Notify Discord on issue closed
+        if: github.event_name == 'issues' && github.event.action == 'closed'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{
+            \"content\": \":white_check_mark: <@755872891601551511>\n**Issue Closed**\n**Repo:** ${{ github.repository }}\n**Title:** ${{ github.event.issue.title }}\n**By:** ${{ github.event.issue.user.login }}\n**Link:** ${{ github.event.issue.html_url }}\"
+          }" \
+          ${{ secrets.DISCORD_WEBHOOK }}
