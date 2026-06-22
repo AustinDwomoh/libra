@@ -20,8 +20,10 @@ jobs:
           MESSAGE: ${{ github.event.head_commit.message }}
           AUTHOR: ${{ github.event.head_commit.author.name }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
         run: |
-          PAYLOAD=$(jq -rn --arg content ":x: <@1518712035896987729>\n**Deploy Failed**\n**Repo:** $REPO\n**Branch:** $BRANCH\n**Commit:** $SHA\n**Message:** $MESSAGE\n**Author:** $AUTHOR" '{content: $content}')
+          MSG=$(printf ":x: <@&%s>\n**Deploy Failed**\n**Repo:** %s\n**Branch:** %s\n**Commit:** \`%s\`\n**Message:** %s\n**Author:** %s" "$ROLE_ID" "$REPO" "$BRANCH" "$SHA" "$MESSAGE" "$AUTHOR")
+          PAYLOAD=$(jq -rn --arg content "$MSG" '{content: $content}')
           curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
 
       - name: Notify Discord on push (success)
@@ -34,8 +36,10 @@ jobs:
           MESSAGE: ${{ github.event.head_commit.message }}
           AUTHOR: ${{ github.event.head_commit.author.name }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
         run: |
-          PAYLOAD=$(jq -rn --arg content ":white_check_mark: <@1518712035896987729> \n **Deploy Successful** \n **Repo:** $REPO \n **Branch:** $BRANCH\n**Commit:** [\`$SHA\`]($URL)\n**Message:** $MESSAGE\n**Author:** $AUTHOR" '{content: $content}')
+          MSG=$(printf ":white_check_mark: <@&%s>\n**Deploy Successful**\n**Repo:** %s\n**Branch:** %s\n**Commit:** [\`%s\`](%s)\n**Message:** %s\n**Author:** %s" "$ROLE_ID" "$REPO" "$BRANCH" "$SHA" "$URL" "$MESSAGE" "$AUTHOR")
+          PAYLOAD=$(jq -rn --arg content "$MSG" '{content: $content}')
           curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
 
       - name: Notify Discord on new issue
@@ -46,8 +50,10 @@ jobs:
           USER: ${{ github.event.issue.user.login }}
           LINK: ${{ github.event.issue.html_url }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
         run: |
-          PAYLOAD=$(jq -rn --arg content ":bug: <@1518712035896987729>\n**New Issue Opened**\n**Repo:** $REPO\n**Title:** $TITLE\n**By:** $USER\n**Link:** $LINK" '{content: $content}')
+          MSG=$(printf ":bug: <@&%s>\n**New Issue Opened**\n**Repo:** %s\n**Title:** %s\n**By:** %s\n**Link:** %s" "$ROLE_ID" "$REPO" "$TITLE" "$USER" "$LINK")
+          PAYLOAD=$(jq -rn --arg content "$MSG" '{content: $content}')
           curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
 
       - name: Notify Discord on issue closed
@@ -58,6 +64,8 @@ jobs:
           USER: ${{ github.event.issue.user.login }}
           LINK: ${{ github.event.issue.html_url }}
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          ROLE_ID: ${{ secrets.DISCORD_ROLE_ID }}
         run: |
-          PAYLOAD=$(jq -rn --arg content ":white_check_mark: <@1518712035896987729>\n**Issue Closed**\n**Repo:** $REPO\n**Title:** $TITLE\n**By:** $USER\n**Link:** $LINK" '{content: $content}')
+          MSG=$(printf ":white_check_mark: <@&%s>\n**Issue Closed**\n**Repo:** %s\n**Title:** %s\n**By:** %s\n**Link:** %s" "$ROLE_ID" "$REPO" "$TITLE" "$USER" "$LINK")
+          PAYLOAD=$(jq -rn --arg content "$MSG" '{content: $content}')
           curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
