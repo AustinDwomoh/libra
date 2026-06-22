@@ -12,7 +12,7 @@ on:
     branches:
       - '**'
   issues:
-    types: [opened, reopened]
+    types: [opened, reopened, closed]
 
 jobs:
   notify:
@@ -20,35 +20,81 @@ jobs:
     steps:
       - name: Notify Discord on push (failure)
         if: failure() && github.event_name == 'push'
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          AUTHOR: ${{ github.event.head_commit.author.name }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          curl -H "Content-Type: application/json" \
-          -d "{
-            \"content\": \":x: <@755872891601551511>\n**Deploy Failed**\n**Repo:** ${{ github.repository }}\n**Branch:** ${{ github.ref_name }}\n**Commit:** ${{ github.sha }}\n**Message:** ${{ github.event.head_commit.message }}\n**Author:** ${{ github.event.head_commit.author.name }}\"
-          }" \
-          ${{ secrets.DISCORD_WEBHOOK }}
+          PAYLOAD=$(jq -n \
+            --arg content ":x: <@1518712035896987729>
+**Deploy Failed**
+**Repo:** $REPO
+**Branch:** $BRANCH
+**Commit:** $SHA
+**Message:** $MESSAGE
+**Author:** $AUTHOR" \
+            '{content: $arg}')
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
 
       - name: Notify Discord on push (success)
         if: success() && github.event_name == 'push'
+        env:
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+          URL: ${{ github.event.head_commit.url }}
+          MESSAGE: ${{ github.event.head_commit.message }}
+          AUTHOR: ${{ github.event.head_commit.author.name }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          curl -H "Content-Type: application/json" \
-          -d "{
-            \"content\": \":white_check_mark: <@755872891601551511>\n**Deploy Successful**\n**Repo:** ${{ github.repository }}\n**Branch:** ${{ github.ref_name }}\n**Commit:** [\`${{ github.sha }}\`](${{ github.event.head_commit.url }})\n**Message:** ${{ github.event.head_commit.message }}\n**Author:** ${{ github.event.head_commit.author.name }}\"
-          }" \
-          ${{ secrets.DISCORD_WEBHOOK }}
+          PAYLOAD=$(jq -n \
+            --arg content ":white_check_mark: <@1518712035896987729>
+**Deploy Successful**
+**Repo:** $REPO
+**Branch:** $BRANCH
+**Commit:** [\`$SHA\`]($URL)
+**Message:** $MESSAGE
+**Author:** $AUTHOR" \
+            '{content: $arg}')
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
 
       - name: Notify Discord on new issue
         if: github.event_name == 'issues'
+        env:
+          REPO: ${{ github.repository }}
+          TITLE: ${{ github.event.issue.title }}
+          USER: ${{ github.event.issue.user.login }}
+          LINK: ${{ github.event.issue.html_url }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          curl -H "Content-Type: application/json" \
-          -d "{
-            \"content\": \":bug: <@755872891601551511>\n**New Issue Opened**\n**Repo:** ${{ github.repository }}\n**Title:** ${{ github.event.issue.title }}\n**By:** ${{ github.event.issue.user.login }}\n**Link:** ${{ github.event.issue.html_url }}\"
-          }" \
-          ${{ secrets.DISCORD_WEBHOOK }}
+          PAYLOAD=$(jq -n \
+            --arg content ":bug: <@1518712035896987729>
+**New Issue Opened**
+**Repo:** $REPO
+**Title:** $TITLE
+**By:** $USER
+**Link:** $LINK" \
+            '{content: $arg}')
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
+
       - name: Notify Discord on issue closed
         if: github.event_name == 'issues' && github.event.action == 'closed'
+        env:
+          REPO: ${{ github.repository }}
+          TITLE: ${{ github.event.issue.title }}
+          USER: ${{ github.event.issue.user.login }}
+          LINK: ${{ github.event.issue.html_url }}
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
-          curl -H "Content-Type: application/json" \
-          -d "{
-            \"content\": \":white_check_mark: <@755872891601551511>\n**Issue Closed**\n**Repo:** ${{ github.repository }}\n**Title:** ${{ github.event.issue.title }}\n**By:** ${{ github.event.issue.user.login }}\n**Link:** ${{ github.event.issue.html_url }}\"
-          }" \
-          ${{ secrets.DISCORD_WEBHOOK }}
+          PAYLOAD=$(jq -n \
+            --arg content ":white_check_mark: <@1518712035896987729>
+**Issue Closed**
+**Repo:** $REPO
+**Title:** $TITLE
+**By:** $USER
+**Link:** $LINK" \
+            '{content: $arg}')
+          curl -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
