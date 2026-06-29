@@ -22,7 +22,8 @@ Schema:
     "skill_0": string,
     "skill_1": string
     ... up to 10 hard skills as skill_0, skill_1, etc.
-  }} or null
+  }} or null,
+  "job_expired": true | false
 }}
 
 Rules:
@@ -33,6 +34,17 @@ Rules:
 - tags: experience_years as "5+" or "3-5", plus top hard/technical skills only
 - location: city/country only, null if not mentioned
 - description: clean plain-text summary of the role (2-4 sentences). null if not enough info.
+- job_expired: set to true if the page text contains phrases like "this job is no longer available",
+  "position has been filled", "listing has expired", "job not found", "no longer accepting",
+  or if the page is clearly a redirect/error/login wall with no actual job content.
+  If expired, set description to "This listing is no longer available." and null out all other fields
+  you cannot confirm.
+
+IMPORTANT — only extract from the actual job posting content:
+- Ignore site navigation, headers, footers, cookie banners, and login prompts
+- Ignore generic employer branding or "about us" boilerplate unless it describes this specific role
+- If the scraped text is mostly page chrome with no real job details, treat fields as null rather
+  than guessing from surrounding content
 
 Already known (do not override):
 {known}
@@ -168,3 +180,37 @@ class GroqProvider(LLMProvider):
 #         ]
 #         output = self._pipe(messages, **self._gen_args)
 #         return output[0]["generated_text"].strip()
+
+# ─── Ollama (local) ────────────────────────────────────────────────────────────
+
+class OllamaProvider(LLMProvider):
+    """
+    Ollama — run any model locally, no API key needed.
+    Runs fully offline.
+
+    pip install ollama
+    ollama pull deepseek-r1:8b  (or qwen2.5:7b, llama3.2, etc.)
+    """
+
+    def __init__(self, model: str = "deepseek-r1:8b"):
+        self.model = model
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            try:
+                import ollama
+            except ImportError:
+                raise ImportError("Run: pip install ollama")
+            self._client = ollama
+        return self._client
+
+    def complete(self, prompt: str) -> str | None:
+        client = self._get_client()
+        response = client.chat(
+            model=self.model,
+            messages=[{"role": "user", "content": prompt}],
+            format="json",  # forces JSON output, same as response_format
+            options={"temperature": 0, "num_ctx": 8192},
+        )
+        return response["message"]["content"]

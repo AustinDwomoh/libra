@@ -1,7 +1,7 @@
 import re, json, uuid, requests, asyncio
 from typing import Optional
 from bs4 import BeautifulSoup
-from Refine.llm import  GroqProvider, LLMProvider
+from Refine.llm import  GroqProvider, LLMProvider, OllamaProvider
 from Utils.constants import Config
 from Utils.models import Job
 
@@ -178,6 +178,47 @@ async def scrape_apply_url(url: str) -> Optional[str]:
         return None
 
 
+_EXPIRED_SIGNALS = [
+    "no longer available",
+    "position has been filled",
+    "listing has expired",
+    "job not found",
+    "no longer accepting",
+    "this job has expired",
+    "posting has been removed",
+    "unable to find this job",
+]
+
+_GARBAGE_SIGNALS = [
+    "sign in to apply",
+    "log in to continue",
+    "please enable javascript",
+    "access denied",
+    "403 forbidden",
+    "404 not found",
+    "just a moment",  # cloudflare
+    "checking your browser",  # cloudflare
+]
+
+def classify_scraped_text(text: str) -> str:
+    """
+    Returns: 'expired' | 'garbage' | 'ok'
+    Call this before passing scraped text to the LLM.
+    """
+    lowered = text.lower()
+
+    if any(signal in lowered for signal in _EXPIRED_SIGNALS):
+        return "expired"
+
+    if any(signal in lowered for signal in _GARBAGE_SIGNALS):
+        return "garbage"
+
+    # if text is too short to contain a real job posting
+    if len(text.strip()) < 300:
+        return "garbage"
+
+    return "ok"
+
 # ─── Apply Extracted Fields to Job ────────────────────────────────────────────
 
 def _apply_to_job(job: "Job", extracted: dict) -> list[str]:
@@ -262,37 +303,60 @@ async def enrich_job(
         filled = _apply_to_job(job, extracted)
         meta["fields_filled"].extend(f"{f} (llm)" for f in filled)
 
+
     # ── Stage 3: Scrape apply_url ──
     missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
-    if missing  and job.apply_url:
+    if missing and job.apply_url:
         Config.logger.info(f"Scraping apply URL for: {missing}")
         meta["stages_run"].append("scrape")
         scraped = await scrape_apply_url(job.apply_url)
 
         if scraped:
-            meta["stages_run"].append("regex_scraped")
-            if Config.is_missing(job.pay_range):
-                pay = _regex_pay(scraped)
-                if pay:
-                    job.pay_range = pay
-                    meta["fields_filled"].append("pay_range (regex+scrape)")
-            if Config.is_missing(job.is_remote):
-                remote = _regex_remote(scraped)
-                if remote is not None:
-                    job.is_remote = remote
-                    meta["fields_filled"].append("is_remote (regex+scrape)")
-            if Config.is_missing(job.role_type):
-                role = _regex_role_type(scraped)
-                if role:
-                    job.role_type = role
-                    meta["fields_filled"].append("role_type (regex+scrape)")
+            # ── Pre-filter scraped text before doing anything with it ──
+            scrape_status = classify_scraped_text(scraped)
 
-            missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
-            if missing and use_llm and provider:
-                meta["stages_run"].append("llm_scraped")
-                extracted = provider.extract(job, scraped)
-                filled = _apply_to_job(job, extracted)
-                meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
+            if scrape_status == "expired":
+                Config.logger.warning(f"Listing expired: {job.title} @ {job.apply_url}")
+                job.description = "This listing is no longer available."
+                meta["expired"] = True
+                meta["stages_run"].append("scrape_expired")
+                # skip all regex + LLM on this garbage
+                Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
+                Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
+                return meta
+
+            elif scrape_status == "garbage":
+                Config.logger.warning(f"Scraped garbage for: {job.title} — skipping LLM on scraped text")
+                meta["stages_run"].append("scrape_garbage")
+                # don't waste an LLM call, just fall through with what we have
+
+            else:
+                # ── Text is good — run regex then LLM ──
+                meta["stages_run"].append("regex_scraped")
+                if Config.is_missing(job.pay_range):
+                    pay = _regex_pay(scraped)
+                    if pay:
+                        job.pay_range = pay
+                        meta["fields_filled"].append("pay_range (regex+scrape)")
+                if Config.is_missing(job.is_remote):
+                    remote = _regex_remote(scraped)
+                    if remote is not None:
+                        job.is_remote = remote
+                        meta["fields_filled"].append("is_remote (regex+scrape)")
+                if Config.is_missing(job.role_type):
+                    role = _regex_role_type(scraped)
+                    if role:
+                        job.role_type = role
+                        meta["fields_filled"].append("role_type (regex+scrape)")
+
+                missing = [f for f in fields_to_check if Config.is_missing(getattr(job, f, None))]
+                if missing and use_llm and provider:
+                    meta["stages_run"].append("llm_scraped")
+                    extracted = provider.extract(job, scraped)
+                    filled = _apply_to_job(job, extracted)
+                    meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
+                    meta["expired"] = extracted.get("expired", False)
+
     Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
     Config.logger.info(f"Done. Filled: {meta['fields_filled']}")
     return meta
@@ -328,12 +392,12 @@ if __name__ == "__main__":
     company_id = uuid.UUID("6c8333ed-7275-4565-9392-81a9aa46aa45")
 
     job1 = Job(
-        title="machine learning intern/co-op",
+        title="Associate Web Developer (.Net)",
         company=company_id,
         location="",
         is_remote=False,
         description="",
-        apply_url="https://job-boards.greenhouse.io/fspco-op012325/jobs/8427924002?utm_source=Simplify&ref=Simplify",
+        apply_url="https://generac.wd5.myworkdayjobs.com/en-US/external/job/Waukesha-WI---USA/Intern-IT---Application-Development--Data-Integration_JR12491?utm_source=Simplify&ref=Simplify",
         role_type="other",
         pay_range=None,
         source="simplify",
@@ -345,7 +409,7 @@ if __name__ == "__main__":
 
 
     # Swap provider here —  or GeminiProvider()
-    meta = asyncio.run(enrich_job(job1, provider=GroqProvider()))
+    meta = asyncio.run(enrich_job(job1, provider=OllamaProvider()))
 
     print("\n=== After ===")
     print(job1)
