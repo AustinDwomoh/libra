@@ -142,7 +142,7 @@ class LLMProvider(ABC):
 #    GROQ_API_KEY=your_key
 #    """
 #
-#    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+#    def __init__(self, model: str = "qwen/qwen3.6-27b"):
 #        self.model = model
 #        self._client = None
 #

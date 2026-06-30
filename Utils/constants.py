@@ -242,10 +242,10 @@ class LLMConstants:
    
    
     _LLM_PROMPT = """Extract structured data from this job posting.
-            Return ONLY valid JSON, no markdown, no explanation.
+        Return ONLY valid JSON, with no extra text or commentary. Use the following schema and rules.
 
-            Schema:
-            {{
+        Schema:
+        {{
             "title": string or null,
             "location": string or null,
             "is_remote": true | false | null,
@@ -254,39 +254,74 @@ class LLMConstants:
             "description": string or null,
             "tags": {{
                 "experience_years": string or null,
-                "skill_0": string,
-                "skill_1": string
-                ... up to 10 hard skills as skill_0, skill_1, etc.
+                "requirements": [string, ...],
+                "preferred": [string, ...],
+                "skills": [string, ...],
+                "technologies": [string, ...],
+                "certifications": [string, ...]
             }} or null,
             "job_expired": true | false
-            }}
+        }}
 
-            Rules:
-            - pay_range must be a 2-element array: [min, max]. Use null for max if only one value.
-            Convert shorthand: 80k -> 80000. Return null if no salary info at all.
-            - is_remote: true if fully remote, false if on-site or hybrid, null if unclear
-            - role_type: default "other" if not determinable
-            - tags: experience_years as "5+" or "3-5", plus top hard/technical skills only
-            - location: city/country only, null if not mentioned
-            - description: clean plain-text summary of the role (2-4 sentences). null if not enough info.
-            - job_expired: set to true if the page text contains phrases like "this job is no longer available",
-            "position has been filled", "listing has expired", "job not found", "no longer accepting",
-            or if the page is clearly a redirect/error/login wall with no actual job content.
-            If expired, set description to "This listing is no longer available." and null out all other fields
-            you cannot confirm.
+        Rules:
+        - pay_range must always be a 2-element array: [min, max]. If only one value exists, return [value, null]. Convert shorthand such as 80k to 80000. Return null if salary is not mentioned.
+        - is_remote: true if fully remote, false if on-site or hybrid, null if unclear.
+        - role_type: return "other" if it cannot be determined.
+        - location: city/state/country only. Do not include street addresses.
+        - description: a clean 2–4 sentence summary of the role. Do not copy large portions of the posting.
+        - job_expired: true if the page clearly indicates the position has expired, been filled, is unavailable, or is only an error/login page.
 
-            IMPORTANT — only extract from the actual job posting content:
-            - Ignore site navigation, headers, footers, cookie banners, and login prompts
-            - Ignore generic employer branding or "about us" boilerplate unless it describes this specific role
-            - If the scraped text is mostly page chrome with no real job details, treat fields as null rather
-            than guessing from surrounding content
+        Tags:
+        - experience_years: required experience (examples: "Entry Level", "3+", "5-7"), or null.
+        - requirements: up to 10 required qualifications, responsibilities, education, or eligibility requirements.
+        - preferred: up to 5 preferred or "nice-to-have" qualifications.
+        - skills: up to 15 important technical or professional skills.
+        - technologies: programming languages, frameworks, databases, cloud services, developer tools, software, etc.
+        - certifications: any required or preferred certifications.
 
-            Already known (do not override):
-            {known}
+        For tags:
+        - Only extract information explicitly stated in the job posting.
+        - Never invent or infer missing information.
+        - Remove duplicates.
+        - Keep each item concise (short phrases, not full sentences).
 
-            Job posting:
-            {text}
-    """
+        Examples:
+        requirements:
+        - Bachelor's degree in Computer Science
+        - 3+ years of software engineering
+        - Authorized to work in the US
+
+        preferred:
+        - Master's degree
+        - Startup experience
+
+        skills:
+        - Problem solving
+        - Communication
+        - REST APIs
+
+        technologies:
+        - Python
+        - Django
+        - PostgreSQL
+        - Docker
+        - AWS
+
+        certifications:
+        - AWS Certified Developer
+
+        IMPORTANT:
+        - Only extract from the actual job posting.
+        - Ignore navigation, headers, footers, cookie banners, login prompts, and employer marketing content.
+        - If the page contains little or no actual job information, return null for unknown fields rather than guessing.
+        - Do not overwrite the values listed under "Already known."
+
+        Already known:
+        {known}
+
+        Job posting:
+        {text}
+        """
     
     # Canonical role types we're willing to store. Anything else gets mapped via
     # keyword sniffing, or falls back to "other" rather than being stored verbatim.
@@ -306,6 +341,7 @@ class LLMConstants:
 
     
     _TEXT_FIELD_LIMITS = {"title": 200, "location": 100, "description": 1000}
+    
 
 
 

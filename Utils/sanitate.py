@@ -132,6 +132,29 @@ class JobDataSanitizer:
             data[field_name] = value[:limit] if value else None
         return data
 
+    def _missing_fields(self, job: Job):
+        fields = []
+
+        if Config.is_missing(job.pay_range):
+            fields.append("pay_range")
+
+        if Config.is_missing(job.location):
+            fields.append("location")
+
+        if Config.is_missing(job.is_remote):
+            fields.append("is_remote")
+
+        if Config.is_missing(job.role_type):
+            fields.append("role_type")
+
+        if Config.is_missing(job.description):
+            fields.append("description")
+
+        if Config.is_missing(job.tags):
+            fields.append("tags")
+
+        return fields
+
     def sanitize(self, data: dict) -> dict:
         """Run all field-level sanitizers over raw LLM JSON before it touches the Job/DB."""
         if not isinstance(data, dict):
