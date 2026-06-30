@@ -161,8 +161,6 @@ class DatePosted(Enum):
     MONTH = "month"
 
 
-
-
 class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     FUZZY_THRESHOLD = 90
@@ -172,7 +170,11 @@ class Config:
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
-    logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True,
+)
     logger = logging.getLogger(__name__)
     GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")
@@ -221,3 +223,89 @@ class Config:
     def _norm_amount(s: str) -> float:
         s = s.replace(",", "").strip()
         return float(s[:-1]) * 1000 if s.lower().endswith("k") else float(s)
+    
+    
+    
+    # ---------------------------------------------------------------------------- #
+    #                             HARD CODED CONSTANTS                             #
+    # ---------------------------------------------------------------------------- #
+
+
+class LLMConstants:
+    """Constants related to LLM processing"""
+    # scrape_apply_url already caps scraped text at 10000 chars, so there's no
+    # point truncating further here — the text is already plain (HTML-stripped)
+    # by the time it reaches us. 10000 chars is roughly 2500 tokens, which fits
+    # comfortably inside both Groq's context window and Ollama's num_ctx=8192
+    # setting (leaving headroom for the prompt template + JSON response).
+    _MAX_PROMPT_CHARS = 10000
+   
+   
+    _LLM_PROMPT = """Extract structured data from this job posting.
+            Return ONLY valid JSON, no markdown, no explanation.
+
+            Schema:
+            {{
+            "title": string or null,
+            "location": string or null,
+            "is_remote": true | false | null,
+            "role_type": "full-time" | "part-time" | "contract" | "internship" | "freelance" | "other" | null,
+            "pay_range": [min_number, max_number] or [min_number, null] or null,
+            "description": string or null,
+            "tags": {{
+                "experience_years": string or null,
+                "skill_0": string,
+                "skill_1": string
+                ... up to 10 hard skills as skill_0, skill_1, etc.
+            }} or null,
+            "job_expired": true | false
+            }}
+
+            Rules:
+            - pay_range must be a 2-element array: [min, max]. Use null for max if only one value.
+            Convert shorthand: 80k -> 80000. Return null if no salary info at all.
+            - is_remote: true if fully remote, false if on-site or hybrid, null if unclear
+            - role_type: default "other" if not determinable
+            - tags: experience_years as "5+" or "3-5", plus top hard/technical skills only
+            - location: city/country only, null if not mentioned
+            - description: clean plain-text summary of the role (2-4 sentences). null if not enough info.
+            - job_expired: set to true if the page text contains phrases like "this job is no longer available",
+            "position has been filled", "listing has expired", "job not found", "no longer accepting",
+            or if the page is clearly a redirect/error/login wall with no actual job content.
+            If expired, set description to "This listing is no longer available." and null out all other fields
+            you cannot confirm.
+
+            IMPORTANT — only extract from the actual job posting content:
+            - Ignore site navigation, headers, footers, cookie banners, and login prompts
+            - Ignore generic employer branding or "about us" boilerplate unless it describes this specific role
+            - If the scraped text is mostly page chrome with no real job details, treat fields as null rather
+            than guessing from surrounding content
+
+            Already known (do not override):
+            {known}
+
+            Job posting:
+            {text}
+    """
+    
+    # Canonical role types we're willing to store. Anything else gets mapped via
+    # keyword sniffing, or falls back to "other" rather than being stored verbatim.
+    _VALID_ROLE_TYPES = {"full-time", "part-time", "contract", "internship", "freelance", "other"}
+
+    _ROLE_TYPE_KEYWORDS = (
+        # order matters — more specific terms checked first
+        (re.compile(r"intern(?:ship)?", re.IGNORECASE), "internship"),
+        (re.compile(r"part[\s-]?time", re.IGNORECASE), "part-time"),
+        (re.compile(r"contract(?:or)?|temp(?:orary)?", re.IGNORECASE), "contract"),
+        (re.compile(r"freelance", re.IGNORECASE), "freelance"),
+        (re.compile(r"full[\s-]?time", re.IGNORECASE), "full-time"),
+    )
+    
+    
+    _MAX_TAGS = 11  # experience_years + up to 10 skills, matches the prompt schema
+
+    
+    _TEXT_FIELD_LIMITS = {"title": 200, "location": 100, "description": 1000}
+
+
+

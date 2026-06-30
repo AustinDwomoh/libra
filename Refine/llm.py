@@ -6,82 +6,83 @@ import json,re
 
 from Utils.constants import Config
 from Utils.models import Job
-_LLM_PROMPT = """Extract structured data from this job posting.
-Return ONLY valid JSON, no markdown, no explanation.
-
-Schema:
-{{
-  "title": string or null,
-  "location": string or null,
-  "is_remote": true | false | null,
-  "role_type": "full-time" | "part-time" | "contract" | "internship" | "freelance" | "other" | null,
-  "pay_range": [min_number, max_number] or [min_number, null] or null,
-  "description": string or null,
-  "tags": {{
-    "experience_years": string or null,
-    "skill_0": string,
-    "skill_1": string
-    ... up to 10 hard skills as skill_0, skill_1, etc.
-  }} or null,
-  "job_expired": true | false
-}}
-
-Rules:
-- pay_range must be a 2-element array: [min, max]. Use null for max if only one value.
-  Convert shorthand: 80k -> 80000. Return null if no salary info at all.
-- is_remote: true if fully remote, false if on-site or hybrid, null if unclear
-- role_type: default "other" if not determinable
-- tags: experience_years as "5+" or "3-5", plus top hard/technical skills only
-- location: city/country only, null if not mentioned
-- description: clean plain-text summary of the role (2-4 sentences). null if not enough info.
-- job_expired: set to true if the page text contains phrases like "this job is no longer available",
-  "position has been filled", "listing has expired", "job not found", "no longer accepting",
-  or if the page is clearly a redirect/error/login wall with no actual job content.
-  If expired, set description to "This listing is no longer available." and null out all other fields
-  you cannot confirm.
-
-IMPORTANT — only extract from the actual job posting content:
-- Ignore site navigation, headers, footers, cookie banners, and login prompts
-- Ignore generic employer branding or "about us" boilerplate unless it describes this specific role
-- If the scraped text is mostly page chrome with no real job details, treat fields as null rather
-  than guessing from surrounding content
-
-Already known (do not override):
-{known}
-
-Job posting:
-{text}
-"""
-
-
-def _build_prompt(job: Job, text: str) -> str:
-    known = {
-        "title":     job.title     if not Config.is_missing(job.title)     else None,
-        "location":  job.location  if not Config.is_missing(job.location)  else None,
-        "is_remote": job.is_remote if not Config.is_missing(job.is_remote) else None,
-        "role_type": job.role_type if not Config.is_missing(job.role_type) else None,
-        "pay_range": job.pay_range if not Config.is_missing(job.pay_range) else None,
-    }
-    return _LLM_PROMPT.format(
-        known=json.dumps({k: v for k, v in known.items() if v is not None}, indent=2),
-        text=text[:4000],
-    )
-
-
-def _normalise_pay(data: dict) -> dict:
-    """Ensure pay_range is always [min, max] format."""
-    if "pay_range" in data and data["pay_range"] is not None:
-        pr = data["pay_range"]
-        if isinstance(pr, list) and len(pr) >= 2:
-            data["pay_range"] = [pr[0], pr[1]]
-        elif isinstance(pr, list) and len(pr) == 1:
-            data["pay_range"] = [pr[0], None]
-        else:
-            data["pay_range"] = None
-    return data
-
+from Utils.sanitate import JobDataSanitizer 
 
 # ─── Base Class ────────────────────────────────────────────────────────────────
+
+class LLMParseError(Exception):
+    """
+    Raised when an LLM response can't be parsed as JSON even after repair
+    attempts. Distinct from network/rate-limit errors raised by complete():
+    callers should treat this as a (likely permanent) bad-output failure
+    rather than a transient one worth retrying indefinitely.
+    """
+    pass
+
+
+def _try_repair_json(raw: str) -> dict | None:
+    """
+    Attempt to recover a dict from near-valid JSON. Smaller/local models
+    (e.g. Ollama qwen2.5 variants) sometimes emit trailing commas, smart
+    quotes, single-quoted keys, or stray prose around the JSON block.
+    Returns the parsed dict, or None if nothing worked.
+    """
+    # 1) Prefer the json_repair library if it's installed — handles far more
+    #    cases than the regex fixups below. Optional dependency, so degrade
+    #    gracefully if it's not available.
+    try:
+        import json_repair  # type: ignore
+        try:
+            repaired = json_repair.loads(raw)
+            if isinstance(repaired, dict):
+                return repaired
+        except Exception:
+            pass
+    except ImportError:
+        pass
+
+    candidate = raw
+
+    # 2) Normalise smart/curly quotes to straight quotes.
+    candidate = (
+        candidate.replace("\u201c", '"').replace("\u201d", '"')
+        .replace("\u2018", "'").replace("\u2019", "'")
+    )
+
+    # 3) Strip trailing commas before a closing } or ].
+    candidate = re.sub(r",\s*([}\]])", r"\1", candidate)
+
+    try:
+        result = json.loads(candidate)
+        if isinstance(result, dict):
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # 4) Single-quoted JSON-ish output (only attempt if there are no double
+    #    quotes at all, to avoid mangling legitimate apostrophes in strings).
+    if "'" in candidate and '"' not in candidate:
+        attempt = candidate.replace("'", '"')
+        try:
+            result = json.loads(attempt)
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    # 5) Last resort: pull out the first {...} block in case the model added
+    #    leading/trailing prose despite instructions not to.
+    match = re.search(r"\{.*\}", candidate, re.DOTALL)
+    if match:
+        try:
+            result = json.loads(match.group(0))
+            if isinstance(result, dict):
+                return result
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
 
 class LLMProvider(ABC):
     """Base class for LLM providers. Implement `complete(prompt) -> str`."""
@@ -92,94 +93,82 @@ class LLMProvider(ABC):
         ...
 
     def extract(self, job: Job, text: str) -> dict:
-        """Build prompt, call LLM, parse and return extracted fields."""
-        prompt = _build_prompt(job, text)
+        """
+        Build prompt, call LLM, parse and return extracted fields.
+
+        Raises:
+            Whatever complete() raises (network/API/rate-limit errors) —
+            these are transient and callers should retry without penalty.
+            LLMParseError — the response couldn't be parsed as JSON even
+            after repair attempts. Callers should treat repeated occurrences
+            of this as a likely-permanent failure (bad model output for this
+            job) rather than retrying forever.
+        """
+        prompt = JobDataSanitizer()._build_prompt(job, text)
+        # Let completion-level exceptions (network, auth, rate limit) bubble
+        # up unmodified — those are transient and shouldn't be conflated
+        # with a parse failure.
+        raw = self.complete(prompt)
+        Config.logger.debug(f"[{self.__class__.__name__}] Raw LLM response: {raw!r}")
+        cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
         try:
-            raw = self.complete(prompt)
-            raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-            data = json.loads(raw)
-            return _normalise_pay(data)
-        except Exception as e:
-            Config.logger.error(f"[{self.__class__.__name__}] LLM failed: {e}")
-            return {}
+            data = json.loads(cleaned)
+            return JobDataSanitizer().sanitize(data)
+        except json.JSONDecodeError as e:
+            Config.logger.warning(
+                f"[{self.__class__.__name__}] JSON parse failed, attempting repair: {e}"
+            )
+            repaired = _try_repair_json(cleaned)
+            if repaired is not None:
+                Config.logger.info(f"[{self.__class__.__name__}] JSON repair succeeded")
+                return JobDataSanitizer().sanitize(repaired)
+
+            Config.logger.error(
+                f"[{self.__class__.__name__}] JSON repair failed, giving up on this "
+                f"response. Raw (truncated): {cleaned[:300]!r}"
+            )
+            raise LLMParseError(f"Could not parse LLM response as JSON: {e}") from e
 
 
 # ─── Groq ──────────────────────────────────────────────────────────────────────
+#Trying to fully relly on Ollama for now, since Groq is a paid service and Ollama is free and local.
+#class GroqProvider(LLMProvider):
+#    """
+#    Groq — recommended default.
+#    Free tier: 14,400 req/day, no credit card needed.
+#    Get key: https://console.groq.com
+#
+#    pip install groq
+#    GROQ_API_KEY=your_key
+#    """
+#
+#    def __init__(self, model: str = "llama-3.3-70b-versatile"):
+#        self.model = model
+#        self._client = None
+#
+#    def _get_client(self):
+#        if self._client is None:
+#            try:
+#                from groq import Groq
+#            except ImportError:
+#                raise ImportError("Run: pip install groq")
+#            api_key = Config.GROQ_API_KEY
+#            if not api_key:
+#                raise ValueError("Set GROQ_API_KEY environment variable")
+#            self._client = Groq(api_key=api_key)
+#        return self._client
+#
+#    def complete(self, prompt: str) -> str|None:
+#        client = self._get_client()
+#        response = client.chat.completions.create(
+#            model=self.model,
+#            messages=[{"role": "user", "content": prompt}],
+#            temperature=0,
+#            response_format={"type": "json_object"},
+#        )
+#        return response.choices[0].message.content
 
-class GroqProvider(LLMProvider):
-    """
-    Groq — recommended default.
-    Free tier: 14,400 req/day, no credit card needed.
-    Get key: https://console.groq.com
-
-    pip install groq
-    GROQ_API_KEY=your_key
-    """
-
-    def __init__(self, model: str = "llama-3.3-70b-versatile"):
-        self.model = model
-        self._client = None
-
-    def _get_client(self):
-        if self._client is None:
-            try:
-                from groq import Groq
-            except ImportError:
-                raise ImportError("Run: pip install groq")
-            api_key = Config.GROQ_API_KEY
-            if not api_key:
-                raise ValueError("Set GROQ_API_KEY environment variable")
-            self._client = Groq(api_key=api_key)
-        return self._client
-
-    def complete(self, prompt: str) -> str|None:
-        client = self._get_client()
-        response = client.chat.completions.create(
-            model=self.model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0,
-            response_format={"type": "json_object"},
-        )
-        return response.choices[0].message.content
-
-
-
-
-# ─── Phi-3 (local) ─────────────────────────────────────────────────────────────
-# class Phi3Provider(LLMProvider):
-#     """
-#     Local Microsoft Phi-3-mini via Hugging Face Transformers.
-#     Runs fully offline — no API key needed.
-#     Requires a CUDA-capable GPU for reasonable speed.
-
-#     pip install transformers torch accelerate
-#     """
-
-#     def __init__(self, model_id: str = "microsoft/Phi-3-mini-4k-instruct"):
-#         torch.random.manual_seed(0)
-#         model = AutoModelForCausalLM.from_pretrained(
-#             model_id,
-#             device_map="cuda",
-#             torch_dtype="auto",
-#             trust_remote_code=False,  # use transformers' built-in Phi-3 support
-#         )
-#         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=False)
-#         self._pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
-#         self._gen_args = {
-#             "max_new_tokens": 500,
-#             "return_full_text": False,
-#             "temperature": 0.0,
-#             "do_sample": False,
-#         }
-
-#     def complete(self, prompt: str) -> str:
-#         """Wrap the shared prompt in a chat message and return the raw text response."""
-#         messages = [
-#             {"role": "system", "content": "You are a structured data extraction assistant. Output only valid JSON."},
-#             {"role": "user",   "content": prompt},
-#         ]
-#         output = self._pipe(messages, **self._gen_args)
-#         return output[0]["generated_text"].strip()
+#never gonna use the Phi3
 
 # ─── Ollama (local) ────────────────────────────────────────────────────────────
 

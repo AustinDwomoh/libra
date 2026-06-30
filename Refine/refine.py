@@ -1,10 +1,10 @@
 """
-enrich_pipeline.py - Post-insert enrichment pass using Groq.
+enrich_pipeline.py - Post-insert enrichment pass using Ollama.
 
 Queries the DB for jobs where enriched=false, runs the extractor pipeline
 (regex → LLM → optional scrape), updates the row, and marks enriched=true.
 
-Never re-calls Groq on a job that has already been enriched.
+Never re-calls Ollama on a job that has already been enriched.
 """
 
 import asyncio,uuid
@@ -12,12 +12,16 @@ from typing import Optional
 from Utils.constants import Config
 from Service.db import JobDatabase
 from Refine.extractor import enrich_job
-from Refine.llm import GroqProvider, LLMProvider
+from Refine.llm import OllamaProvider, LLMProvider, LLMParseError
 from Utils.models import Job
 
 
-# Fields we want Groq to fill. Enrichment is skipped entirely if all are present.
+# Fields we want  to fill. Enrichment is skipped entirely if all are present.
 ENRICH_FIELDS = ("description", "is_remote", "role_type", "pay_range", "tags")
+
+# How many times we'll retry a job that fails with an LLMParseError (the
+# model's output was unparseable, even after repair) before giving up on it.
+MAX_ENRICH_ATTEMPTS = 3
 
 
 def _needs_enrichment(row: dict) -> bool:
@@ -54,20 +58,20 @@ async def enrich_unenriched_jobs(
     Main entry point.  Call this after bulk_upsert in azalea.run().
 
     Args:
-        provider:       LLM provider instance. Defaults to GroqProvider().
-        use_llm:        Whether to call Groq at all (regex always runs).
+        provider:       LLM provider instance. Defaults to OllamaProvider().
+        use_llm:        Whether to call Ollama at all (regex always runs).
         scrape_if_empty: Whether to Playwright-scrape apply_url as last resort.
-        batch_size:     Max jobs to enrich per run (guards against Groq rate limits).
-        llm_delay:      Seconds between Groq calls.
+        batch_size:     Max jobs to enrich per run (guards against Ollama rate limits).
+        llm_delay:      Seconds between Ollama calls.
 
     Returns:
         {"attempted": int, "enriched": int, "skipped": int, "errors": int}
     """
     if use_llm and provider is None:
-        provider = GroqProvider()
+        provider = OllamaProvider()
 
     db = await JobDatabase.create()
-    stats = {"attempted": 0, "enriched": 0, "skipped": 0, "errors": 0}
+    stats = {"attempted": 0, "enriched": 0, "skipped": 0, "errors": 0, "gave_up": 0}
 
     # Pull a batch of unenriched jobs
     rows = await db.select(
@@ -110,7 +114,38 @@ async def enrich_unenriched_jobs(
             )
             Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
             Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
+        except LLMParseError as e:
+            # The model's output was unparseable even after repair attempts.
+            # This is more likely a persistent issue (bad model, weird input
+            # text) than a one-off blip — cap retries so we don't loop on it
+            # forever.
+            attempts = (row.get("enrich_attempts") or 0) + 1
+            if attempts >= MAX_ENRICH_ATTEMPTS:
+                Config.logger.warning(
+                    f"Enrichment: giving up on job {job_id} after {attempts} "
+                    f"unparseable LLM responses: {e}"
+                )
+                await db.update(
+                    "job_list",
+                    data={"enriched": True, "enrich_attempts": attempts},
+                    filters={"id": job_id},
+                )
+                stats["gave_up"] += 1
+            else:
+                Config.logger.warning(
+                    f"Enrichment: unparseable LLM response for job {job_id} "
+                    f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry: {e}"
+                )
+                await db.update(
+                    "job_list",
+                    data={"enrich_attempts": attempts},
+                    filters={"id": job_id},
+                )
+            stats["errors"] += 1
+            continue
         except Exception as e:
+            # Network errors, rate limits, DB hiccups, etc. — treat as
+            # transient and don't count against the job; just retry next run.
             Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
             stats["errors"] += 1
             # Don't mark enriched — will retry next run
@@ -135,7 +170,7 @@ async def enrich_unenriched_jobs(
     Config.logger.info(
         f"Enrichment complete — attempted: {stats['attempted']}, "
         f"enriched: {stats['enriched']}, skipped: {stats['skipped']}, "
-        f"errors: {stats['errors']}"
+        f"errors: {stats['errors']}, gave_up: {stats['gave_up']}"
     )
     return stats
 
