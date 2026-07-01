@@ -1,7 +1,7 @@
-# Libra
+# Libra - OLD readme
 
 > Job scraping and sponsorship detection API — v2
-
+> ## Join our Discord to work with us [link](https://discord.gg/Uuy5BwxGzU)
 <p align="center">
   <img src="./logo.svg" alt="Libra logo" width="240" />
 </p>
