@@ -161,8 +161,6 @@ class DatePosted(Enum):
     MONTH = "month"
 
 
-
-
 class Config:
     DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
     FUZZY_THRESHOLD = 90
@@ -172,7 +170,11 @@ class Config:
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
-    logging.basicConfig(level=logging.INFO,format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    force=True,
+)
     logger = logging.getLogger(__name__)
     GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")
@@ -221,3 +223,125 @@ class Config:
     def _norm_amount(s: str) -> float:
         s = s.replace(",", "").strip()
         return float(s[:-1]) * 1000 if s.lower().endswith("k") else float(s)
+    
+    
+    
+    # ---------------------------------------------------------------------------- #
+    #                             HARD CODED CONSTANTS                             #
+    # ---------------------------------------------------------------------------- #
+
+
+class LLMConstants:
+    """Constants related to LLM processing"""
+    # scrape_apply_url already caps scraped text at 10000 chars, so there's no
+    # point truncating further here — the text is already plain (HTML-stripped)
+    # by the time it reaches us. 10000 chars is roughly 2500 tokens, which fits
+    # comfortably inside both Groq's context window and Ollama's num_ctx=8192
+    # setting (leaving headroom for the prompt template + JSON response).
+    _MAX_PROMPT_CHARS = 10000
+   
+   
+    _LLM_PROMPT = """Extract structured data from this job posting.
+        Return ONLY valid JSON, with no extra text or commentary. Use the following schema and rules.
+
+        Schema:
+        {{
+            "title": string or null,
+            "location": string or null,
+            "is_remote": true | false | null,
+            "role_type": "full-time" | "part-time" | "contract" | "internship" | "freelance" | "other" | null,
+            "pay_range": [min_number, max_number] or [min_number, null] or null,
+            "description": string or null,
+            "tags": {{
+                "experience_years": string or null,
+                "requirements": [string, ...],
+                "preferred": [string, ...],
+                "skills": [string, ...],
+                "technologies": [string, ...],
+                "certifications": [string, ...]
+            }} or null,
+            "job_expired": true | false
+        }}
+
+        Rules:
+        - pay_range must always be a 2-element array: [min, max]. If only one value exists, return [value, null]. Convert shorthand such as 80k to 80000. Return null if salary is not mentioned.
+        - is_remote: true if fully remote, false if on-site or hybrid, null if unclear.
+        - role_type: return "other" if it cannot be determined.
+        - location: city/state/country only. Do not include street addresses.
+        - description: a clean 2–4 sentence summary of the role. Do not copy large portions of the posting.
+        - job_expired: true if the page clearly indicates the position has expired, been filled, is unavailable, or is only an error/login page.
+
+        Tags:
+        - experience_years: required experience (examples: "Entry Level", "3+", "5-7"), or null.
+        - requirements: up to 10 required qualifications, responsibilities, education, or eligibility requirements.
+        - preferred: up to 5 preferred or "nice-to-have" qualifications.
+        - skills: up to 15 important technical or professional skills.
+        - technologies: programming languages, frameworks, databases, cloud services, developer tools, software, etc.
+        - certifications: any required or preferred certifications.
+
+        For tags:
+        - Only extract information explicitly stated in the job posting.
+        - Never invent or infer missing information.
+        - Remove duplicates.
+        - Keep each item concise (short phrases, not full sentences).
+
+        Examples:
+        requirements:
+        - Bachelor's degree in Computer Science
+        - 3+ years of software engineering
+        - Authorized to work in the US
+
+        preferred:
+        - Master's degree
+        - Startup experience
+
+        skills:
+        - Problem solving
+        - Communication
+        - REST APIs
+
+        technologies:
+        - Python
+        - Django
+        - PostgreSQL
+        - Docker
+        - AWS
+
+        certifications:
+        - AWS Certified Developer
+
+        IMPORTANT:
+        - Only extract from the actual job posting.
+        - Ignore navigation, headers, footers, cookie banners, login prompts, and employer marketing content.
+        - If the page contains little or no actual job information, return null for unknown fields rather than guessing.
+        - Do not overwrite the values listed under "Already known."
+
+        Already known:
+        {known}
+
+        Job posting:
+        {text}
+        """
+    
+    # Canonical role types we're willing to store. Anything else gets mapped via
+    # keyword sniffing, or falls back to "other" rather than being stored verbatim.
+    _VALID_ROLE_TYPES = {"full-time", "part-time", "contract", "internship", "freelance", "other"}
+
+    _ROLE_TYPE_KEYWORDS = (
+        # order matters — more specific terms checked first
+        (re.compile(r"intern(?:ship)?", re.IGNORECASE), "internship"),
+        (re.compile(r"part[\s-]?time", re.IGNORECASE), "part-time"),
+        (re.compile(r"contract(?:or)?|temp(?:orary)?", re.IGNORECASE), "contract"),
+        (re.compile(r"freelance", re.IGNORECASE), "freelance"),
+        (re.compile(r"full[\s-]?time", re.IGNORECASE), "full-time"),
+    )
+    
+    
+    _MAX_TAGS = 11  # experience_years + up to 10 skills, matches the prompt schema
+
+    
+    _TEXT_FIELD_LIMITS = {"title": 200, "location": 100, "description": 1000}
+    
+
+
+
