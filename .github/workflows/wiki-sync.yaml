@@ -50,9 +50,16 @@ jobs:
           -d "{\"content\": \":x: <@755872891601551511>\nLibra **wiki sync** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
 
-      - name: Notify Discord on success
+      - name: Notify Discord on success (changes synced)
         if: success() && steps.sync.outputs.changed == 'true'
         run: |
           curl -H "Content-Type: application/json" \
           -d "{\"content\": \":white_check_mark: Libra **wiki synced** for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Notify Discord on success (no changes)
+        if: success() && steps.sync.outputs.changed == 'false'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{\"content\": \":information_source: Libra **wiki sync** ran for **${{ github.repository }}** @ **${{ github.ref_name }}** — no changes to sync.\"}" \
           ${{ secrets.DISCORD_WEBHOOK }}
