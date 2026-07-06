@@ -11,7 +11,7 @@ import asyncio,uuid
 from typing import Optional
 from Utils.constants import Config
 from Service.db import JobDatabase
-from Refine.extractor import enrich_job
+from Refine.extractor import JobEnricher
 from Refine.llm import OllamaProvider, LLMProvider, LLMParseError
 from Utils.models import Job
 
@@ -107,11 +107,8 @@ async def enrich_unenriched_jobs(
 
         try:
             Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
-            meta = await enrich_job(
-                job,
-                provider=provider,
-                use_llm=use_llm,
-            )
+            enricher = JobEnricher(provider=provider, use_llm=use_llm)
+            meta = await enricher.enrich_job(job)
             Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
             Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
         except LLMParseError as e:
