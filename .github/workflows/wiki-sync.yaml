@@ -1,0 +1,58 @@
+name: Sync Wiki
+
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - "wiki/**"
+  workflow_dispatch:
+
+jobs:
+  sync-wiki:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main repo
+        uses: actions/checkout@v4
+        with:
+          path: main
+
+      - name: Checkout wiki repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}.wiki
+          token: ${{ secrets.WIKI_DEPLOY_TOKEN }}
+          path: wiki
+
+      - name: Copy wiki source into wiki repo
+        run: |
+          rsync -av --delete --exclude='.git' main/wiki/ wiki/
+
+      - name: Commit and push if changed
+        id: sync
+        working-directory: wiki
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          if git diff --cached --quiet; then
+            echo "No wiki changes to sync."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Sync wiki from ${{ github.sha }}"
+          git push
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Discord on failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{\"content\": \":x: <@755872891601551511>\nLibra **wiki sync** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          ${{ secrets.DISCORD_WEBHOOK }}
+
+      - name: Notify Discord on success
+        if: success() && steps.sync.outputs.changed == 'true'
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d "{\"content\": \":white_check_mark: Libra **wiki synced** for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
+          ${{ secrets.DISCORD_WEBHOOK }}
