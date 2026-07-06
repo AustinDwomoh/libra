@@ -86,7 +86,7 @@ async def enrich_unenriched_jobs(
         return stats
 
     Config.logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
-
+    enricher = JobEnricher(provider=provider, use_llm=use_llm)
     for i, row in enumerate(rows):
         stats["attempted"] += 1
         job_id = row["id"]
@@ -107,7 +107,6 @@ async def enrich_unenriched_jobs(
 
         try:
             Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
-            enricher = JobEnricher(provider=provider, use_llm=use_llm)
             meta = await enricher.enrich_job(job)
             Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
             Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")

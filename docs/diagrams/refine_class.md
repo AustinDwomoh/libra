@@ -1,62 +1,35 @@
 ```mermaid
-%% classDiagram — refine module functions and relationships
+%% classDiagram — refine.py module-level batch enrichment (no class, but shown as a unit)
 classDiagram
-    class refine {
-        <<module>>
+    class refine_module {
+        <<Refine/refine.py>>
         +ENRICH_FIELDS: tuple
+        +MAX_ENRICH_ATTEMPTS: int = 3
         +enrich_unenriched_jobs(provider, use_llm, batch_size, llm_delay) dict
         -_needs_enrichment(row) bool
         -_row_to_job(row) Job
         -_mark_enriched(db, job_id) None
     }
 
+    class JobEnricher {
+        <<Refine/extractor.py>>
+        +enrich_job(job) dict
+    }
+
     class JobDatabase {
-        +create() JobDatabase
-        +select(table, filters, order_by, limit) list[dict]
-        +upsert(table, data, conflict_column) dict
-        +update(table, data, filters) None
+        <<Service/db.py>>
+        +select(...) list~dict~
+        +update(...) dict
+        +upsert(...) dict
     }
 
-    class enrich_job {
-        <<function: extractor>>
-        +enrich_job(job, provider, use_llm) dict
+    class LLMParseError {
+        <<Exception, Refine/llm.py>>
     }
 
-    class LLMProvider {
-        <<abstract>>
-        +extract(job, text) dict
-        +complete(prompt) str*
-    }
+    refine_module --> JobDatabase : pull unenriched batch, persist results
+    refine_module --> JobEnricher : "new instance created PER JOB\n(meta dict isn't reset between calls)"
+    refine_module ..> LLMParseError : catches, increments enrich_attempts,\ncaps retries at MAX_ENRICH_ATTEMPTS
 
-    class GroqProvider {
-        +complete(prompt) str
-    }
-
-    class Job {
-        +title: str
-        +company: UUID
-        +location: str
-        +is_remote: Optional[bool]
-        +description: str
-        +apply_url: Optional[str]
-        +role_type: str
-        +pay_range: Optional[list]
-        +source: str
-        +tags: dict
-        +to_dict_for_db() dict
-    }
-
-    class Config {
-        +is_missing(value) bool
-        +logger
-    }
-
-    LLMProvider <|-- GroqProvider : extends
-    refine --> JobDatabase : query + upsert + update
-    refine --> enrich_job : delegates enrichment
-    refine --> LLMProvider : passes provider to enrich_job
-    refine --> GroqProvider : default provider
-    refine --> Job : reconstructs via _row_to_job
-    refine --> Config : uses is_missing + logger
-
+    note for refine_module "Bug fixed: previously imported a\ntop-level enrich_job() function that\nno longer existed after the JobEnricher\nrefactor — broke this module's import\nentirely. Now imports JobEnricher class\nand instantiates it inside the loop."
 ```

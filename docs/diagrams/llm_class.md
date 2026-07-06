@@ -1,59 +1,40 @@
 ```mermaid
-%% classDiagram — llm module: LLMProvider hierarchy and relationships
+%% classDiagram — LLMProvider hierarchy, currently Ollama-only (Groq commented out)
 classDiagram
     class LLMProvider {
         <<abstract>>
-        +complete(prompt) str*
-        +extract(job, text) dict
+        +complete(prompt: str) str*
+        +extract(job: Job, text: str) dict
+    }
+
+    class OllamaProvider {
+        +model: str = "deepseek-r1:8b"
+        -_client
+        +complete(prompt) str
+        -_get_client()
     }
 
     class GroqProvider {
-        +model: str
-        -_client: Optional[Groq]
-        +__init__(model)
-        -_get_client() Groq
-        +complete(prompt) str or None
-    }
-
-    class Phi3Provider {
         <<commented out>>
-        -_pipe: pipeline
-        -_gen_args: dict
+        +model: str = "qwen/qwen3.6-27b"
         +complete(prompt) str
+        note: "Disabled — project moved to\nfree/local Ollama. Code retained\nfor an easy swap-back if needed."
     }
 
-    class llm_module {
-        <<module>>
-        -_LLM_PROMPT: str
-        -_build_prompt(job, text) str
-        -_normalise_pay(data) dict
+    class LLMParseError {
+        <<Exception>>
+        note: "Raised when JSON can't be parsed\neven after repair attempts.\nDistinct from transient network/\nrate-limit errors from complete()."
     }
 
-    class Job {
-        +title: str
-        +location: str
-        +is_remote: Optional[bool]
-        +role_type: str
-        +pay_range: Optional[list]
+    class JobDataSanitizer {
+        <<Utils/sanitate.py>>
+        +sanitize(data: dict) dict
+        +_build_prompt(job, text) str
     }
 
-    class Config {
-        +is_missing(value) bool
-        +GROQ_API_KEY: str
-        +logger
-    }
-
-    class Groq {
-        <<external: groq>>
-        +chat.completions.create() response
-    }
-
-    LLMProvider <|-- GroqProvider : extends
-    LLMProvider <|-- Phi3Provider : extends (disabled)
-    LLMProvider --> llm_module : uses _build_prompt + _normalise_pay
-    LLMProvider --> Job : reads fields for prompt
-    LLMProvider --> Config : uses is_missing + logger
-    GroqProvider --> Groq : lazy-init client
-    GroqProvider --> Config : reads GROQ_API_KEY
-
+    LLMProvider <|-- OllamaProvider
+    LLMProvider <|-- GroqProvider
+    LLMProvider ..> LLMParseError : raises
+    LLMProvider --> JobDataSanitizer : sanitizes parsed output
+    LLMProvider --> LLMParseError : uses _try_repair_json() before raising
 ```
