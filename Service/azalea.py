@@ -51,6 +51,7 @@ class Azalea:
                 f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled."
             )
         if Config.REMOTEOK:
+            #Todo: add a check for the REMOTEOK API key or credentials if needed
             # Placeholder for future RemoteOK helper
             self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
             Config.logger.info(
@@ -198,13 +199,6 @@ class Azalea:
                 # ── Step 3: Save JSON (optional) ─────────────────────────────
                 if save_json:
                     Config.save_to_json([Job.to_dict(job) for job in unique_jobs])
-
-                list_jobs = [
-                    Job.to_dict_for_db(job)
-                    for job in unique_jobs
-                    if job.title != "unknown"
-                ]
-
             else:
                 # ── TEST MODE: skip fetch/dedup, load directly from JSON ─────
                 Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
@@ -228,8 +222,12 @@ class Azalea:
             # ── Step 4: Insert to DB ─────────────────────────────────────────
             self._log_section("SAVING TO DATABASE")
             db = await JobDatabase.create()
+            fin_jobs = [job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown"]
+            if not fin_jobs:
+                Config.logger.warning("No valid jobs to insert into the database")
+                return self.stats.to_dict()
             inserted = await db.bulk_upsert(
-                "job_list", list_jobs, conflict_column=["title", "company", "apply_url"]
+                "job_list", fin_jobs , conflict_column=["title", "company", "apply_url"]
             )
             self.stats.inserted = len(inserted)
             Config.logger.info(

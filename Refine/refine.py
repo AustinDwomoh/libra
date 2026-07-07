@@ -86,11 +86,11 @@ async def enrich_unenriched_jobs(
         return stats
 
     Config.logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
-    enricher = JobEnricher(provider=provider, use_llm=use_llm)
+    
     for i, row in enumerate(rows):
         stats["attempted"] += 1
         job_id = row["id"]
-
+        enricher = JobEnricher(provider=provider, use_llm=use_llm)
         # Fast-path: if nothing is actually missing, just mark enriched and move on
         if not _needs_enrichment(row):
             await _mark_enriched(db, job_id)
