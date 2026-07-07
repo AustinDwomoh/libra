@@ -7,3 +7,6 @@ __pycache__
 *.pyo
 libra/
 resources/
+failed_packages.txt
+debug_page.html
+logs/
