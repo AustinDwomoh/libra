@@ -66,9 +66,10 @@ classDiagram
     Azalea --> Simplify : helpers[SIMPLIFY]
     Azalea --> JSearch : helpers[JSEARCH]?
     Azalea --> RemoteOKHelper : helpers[REMOTEOK]?
-    Azalea --> JobDatabase : bulk_upsert
+    Azalea --> JobDatabase : bulk_upsert(fin_jobs)
     Azalea --> enrich_unenriched_jobs : test mode only
     Azalea --> notify_discord : on error in main()
     Azalea --> JobSource : keys helpers dict
 
+    note for Azalea "self.jobs is now the single source of truth for\nBOTH modes — production sets it at Step 2\n(dedup), test mode builds it via Job.from_dict()\nin the JSON-load loop. Step 4 always converts\nself.jobs -> fin_jobs via to_dict_for_db() right\nbefore the DB call, so both modes get identical\nUUID/tags normalization. (Previously test mode\nbypassed this and inserted raw, unconverted JSON.)"
 ```

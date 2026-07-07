@@ -24,11 +24,14 @@ CREATE TABLE job_list (
     source TEXT,
     tags JSONB DEFAULT '{}',
     enriched BOOLEAN DEFAULT false,
+    enrich_attempts INT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE (title, company, apply_url)
 );
 ```
+
+> **`enrich_attempts` is referenced in code (`Refine/refine.py`) but was never added as a tracked SQL migration.** If your live DB predates the retry-cap logic, run `ALTER TABLE job_list ADD COLUMN enrich_attempts INT DEFAULT 0;` manually. There's no migrations folder in this repo — schema changes so far have all been manual `ALTER`/`CREATE` statements run directly against the DB, so it's worth keeping a running note (here, or a `migrations/` folder) of anything applied outside this file.
 
 ## `JobDatabase` methods
 
@@ -60,4 +63,4 @@ DO UPDATE SET
 
 This means re-scraping a job that already exists **never nulls out** a field that was previously enriched — a fresh scrape only has `title`/`location`/`apply_url`/`source`, so `description`, `pay_range`, etc. would otherwise get wiped to `NULL` on every re-scrape. COALESCE prevents that: only a non-null incoming value overwrites the existing one.
 
-This is also why enrichment can safely run independently of scraping — a scrape never regresses an already-enriched row.
+This is also why enrichment can safely run independently of scraping — a scrape never regresses an already-enriched row. The one place this pattern is deliberately *not* used is `_apply_structured_data()` in the enrichment pipeline (see [[Enrichment-Pipeline]]), which overwrites fields in-memory on the `Job` object when a schema.org `JobPosting` block is found — that overwritten value then flows through the normal `upsert()` afterward.

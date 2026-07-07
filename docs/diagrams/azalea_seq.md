@@ -16,10 +16,10 @@ sequenceDiagram
     end
 
     Az->>Cfg: REMOTEOK configured?
+    Note over Cfg: Config.REMOTEOK is a hardcoded URL string,\nnot a bool — always truthy, so this branch\nalways registers RemoteOK regardless of intent
     alt configured
         Az->>H: helpers[REMOTEOK] = RemoteOKHelper()
     end
-
 
 ```
 
@@ -92,13 +92,15 @@ sequenceDiagram
 ```
 
 ```mermaid
-%% sequenceDiagram — run() normal mode (fetch → dedup → JSON → DB)
+%% sequenceDiagram — run() PRODUCTION mode (test=False): fetch → dedup → JSON → DB
+%% This is the actual, intended behavior of run() when called normally
+%% (e.g. from Tasks/scrape.py). Enrichment does NOT happen here by design —
+%% see Tasks/enrich.py / the separate GitHub Actions "enrich" job instead.
 sequenceDiagram
-    participant Entry as Tasks/main
+    participant Entry as Tasks/scrape.py
     participant Az as Azalea.run
     participant FA as fetch_all_sources
     participant DB as JobDatabase
-    participant Enrich as enrich_unenriched_jobs
 
     Entry->>Az: await run(position_type, save_json, jsearch_queries, test=False)
 
@@ -106,33 +108,44 @@ sequenceDiagram
     FA-->>Az: all_jobs
 
     alt no jobs
-        Az-->>Entry: stats.to_dict()
+        Az-->>Entry: stats.to_dict() (early return)
     end
 
     Az->>Az: filter None → set() dedup → is_valid() filter
-    Az->>Az: stats.unique_jobs = len(unique_jobs)
+    Az->>Az: self.jobs = unique_jobs
+    Note over Az: self.jobs is the single source of truth\nfrom here on, for both modes
 
     alt save_json=True
-        Az->>Az: Config.save_to_json(unique_jobs)
+        Az->>Az: Config.save_to_json([Job.to_dict(job) for job in unique_jobs])
+        Note over Az: to_dict() shape — company as str,\ntags not guaranteed dict. JSON-only, never DB-bound.
     end
 
-    Az->>Az: to_dict_for_db() — exclude title="unknown"
-
     Az->>DB: JobDatabase.create()
-    Az->>DB: bulk_upsert(job_list, list_jobs, conflict=[title,company,apply_url])
+    Az->>Az: fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown"]
+    Note over Az: to_dict_for_db() shape — company as UUID,\ntags normalized to dict. THIS is what reaches Postgres.
+
+    alt fin_jobs is empty
+        Az-->>Entry: stats.to_dict() (early return, nothing to insert)
+    end
+
+    Az->>DB: bulk_upsert(job_list, fin_jobs, conflict=[title,company,apply_url])
     DB-->>Az: inserted list
     Az->>Az: stats.inserted = len(inserted)
 
-    Note over Az: Enrich skipped in normal mode (commented out)
+    Note over Az: Enrichment intentionally skipped here —\nhandled separately by Tasks/enrich.py
 
     Az-->>Entry: stats.to_dict()
 
 ```
 
 ```mermaid
-%% sequenceDiagram — run() test mode (JSON load → DB → enrich)
+%% sequenceDiagram — run() TEST mode (test=True): JSON load → self.jobs → DB → enrich
+%% Used for iterating on enrichment logic without re-hitting scrape sources.
+%% FIXED: previously this path inserted raw, unconverted JSON dicts (missing
+%% UUID/tags normalization) instead of going through to_dict_for_db() like
+%% production mode did. Both modes now share the same fin_jobs conversion step.
 sequenceDiagram
-    participant Dev as Developer
+    participant Dev as Developer (manual run/testing)
     participant Az as Azalea.run
     participant FS as FilePaths.SCRAPED_JOBS_JSON
     participant DB as JobDatabase
@@ -141,18 +154,28 @@ sequenceDiagram
     Dev->>Az: await run(test=True)
 
     Az->>FS: open + json.load()[:20]
+    Note over FS: raw dicts, in Job.to_dict() shape\n(company as str, tags shape not guaranteed)
+
     alt FileNotFoundError or JSONDecodeError
         Az-->>Dev: stats.to_dict() (early return)
     end
 
     loop for each job_dict
-        Az->>Az: UUID(job_dict["company"])
-        Az->>Az: Job.from_dict(job_dict, company=UUID)
+        Az->>Az: company_id = UUID(job_dict["company"])
+        Az->>Az: job = Job.from_dict(job_dict, company=company_id)
         Az->>Az: self.jobs.append(job)
+        Note over Az: self.jobs now holds proper Job objects,\nsame as production mode's unique_jobs
     end
 
     Az->>DB: JobDatabase.create()
-    Az->>DB: bulk_upsert(job_list, list_jobs, conflict=[title,company,apply_url])
+    Az->>Az: fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown"]
+    Note over Az: SAME conversion step as production mode —\nthis is the fix. self.jobs is the shared source of truth.
+
+    alt fin_jobs is empty
+        Az-->>Dev: stats.to_dict() (early return)
+    end
+
+    Az->>DB: bulk_upsert(job_list, fin_jobs, conflict=[title,company,apply_url])
     DB-->>Az: inserted
 
     Az->>Enrich: await enrich_unenriched_jobs(batch_size=20)
