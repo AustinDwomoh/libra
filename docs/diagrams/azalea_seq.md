@@ -41,7 +41,7 @@ sequenceDiagram
         Az-->>FA: [] (early return)
     end
 
-    try
+    alt no exception raised
         alt source == JSEARCH
             Az->>JS: await helper.fetch_jobs(queries, position_type, date_posted)
             JS-->>Az: List[Job]
@@ -52,7 +52,7 @@ sequenceDiagram
         end
         Az->>Az: stats.increment_source(source, len(jobs))
         Az-->>FA: List[Job]
-    catch Exception
+    else Exception raised
         Az->>Az: log error, stats.errors++
         Az-->>FA: []
     end

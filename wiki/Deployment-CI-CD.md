@@ -19,7 +19,7 @@ Trigger: push to `master`. Pulls latest code (`git reset --hard origin/master`),
 (also `workflow_dispatch` for manual runs)
 
 - **`scrape` job**: runs on every scheduled trigger — SSHes in, pulls latest, runs `Tasks/scrape.py`, logs to `logs/scrape.log`
-- **`enrich` job**: `needs: scrape`, but only actually runs when the trigger is the `0 5 * * *` cron slot or a manual `workflow_dispatch` — i.e. enrichment runs once a day, not on every scrape cycle, to bound Groq usage
+- **`enrich` job**: `needs: scrape`, but only actually runs when the trigger is the `0 5 * * *` cron slot or a manual `workflow_dispatch` — i.e. enrichment runs once a day, not on every scrape cycle, to bound local Ollama enrichment time
 
 Both jobs post a Discord failure notification if the SSH step fails; success isn't announced for these (only for `deploy.yaml`).
 
