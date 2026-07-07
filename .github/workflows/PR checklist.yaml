@@ -1,0 +1,28 @@
+name: PR Checklist
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+    branches: ["master"]
+
+jobs:
+  check-boxes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail if any checklist item is unchecked
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request.body || "";
+            const unchecked = (body.match(/- \[ \]/g) || []).length;
+            const checked = (body.match(/- \[x\]/gi) || []).length;
+
+            if (unchecked > 0) {
+              core.setFailed(
+                `${unchecked} checklist item(s) still unchecked (${checked} checked). ` +
+                `Check every applicable box in the PR description before merging. ` +
+                `If an item genuinely doesn't apply, check it anyway and note why in a comment.`
+              );
+            } else {
+              console.log(`All ${checked} checklist items checked.`);
+            }
