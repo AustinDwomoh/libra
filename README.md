@@ -2,7 +2,9 @@
 
 > Job scraping and enrichment API — v2
 > 
-> Note: This doesnt fully explain local setup as it assumes all working on it are some contact with the creators 
+> Note: This doesnt fully explain local setup as it assumes all working on it are some contact with the creators
+>
+> Join our Discord to work with us [link](https://discord.gg/Uuy5BwxGzU)
 
 <p align="center">
   <img src="./logo.svg" alt="Libra logo" width="240" />
