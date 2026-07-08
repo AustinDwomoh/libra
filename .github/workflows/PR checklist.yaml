@@ -5,6 +5,10 @@ on:
     types: [opened, edited, synchronize, reopened]
     branches: ["master"]
 
+concurrency:
+  group: pr-checklist-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check-boxes:
     runs-on: ubuntu-latest
