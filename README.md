@@ -1,7 +1,9 @@
-# Libra - OLD readme
+# Libra
 
-> Job scraping and sponsorship detection API — v2
-> ## Join our Discord to work with us [link](https://discord.gg/Uuy5BwxGzU)
+> Job scraping and enrichment API — v2
+> 
+> Note: This doesnt fully explain local setup as it assumes all working on it are some contact with the creators 
+
 <p align="center">
   <img src="./logo.svg" alt="Libra logo" width="240" />
 </p>
@@ -10,99 +12,95 @@
 
 ## Overview
 
-Libra is a FastAPI-based service that aggregates internship and full-time job listings from multiple sources, enriches them with structured data extracted via LLM, and exposes them through a read-only REST API. Its primary focus is tagging jobs with H-1B visa sponsorship signals extracted directly from job descriptions.
+Libra aggregates internship and full-time job listings from multiple sources, enriches them with structured data (pay range, remote status, role type, required skills, H-1B sponsorship signal), and serves them through a read-only FastAPI.
 
-**Live API:** `http://libra.austindwomoh.xyz`  
-**Interactive docs:** `http://libra.austindwomoh.xyz/docs`  
-**Author:** Austin Dwomoh
-
----
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Scrape Phase                             │
-│  Simplify (GitHub README) + JSearch API + RemoteOK API          │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ List[Job]
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Deduplication                               │
-│  Set-based using __hash__ on (title, company, apply_url)        │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ unique valid jobs
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Database Upsert                              │
-│  Bulk insert into job_list — ON CONFLICT DO UPDATE with         │
-│  COALESCE to preserve existing non-null values on re-scrapes    │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ enriched=false rows
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Enrichment Pipeline                           │
-│  Groq LLM extracts: title, location, remote status, role type,  │
-│  pay range, skills tags, and sponsorship from descriptions      │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ enriched=true
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      REST API                                   │
-│  FastAPI serves read-only queries: /jobs, /company, /search,    │
-│  /sponsor                                                       │
-└─────────────────────────────────────────────────────────────────┘
-```
+**Live API:** `http://libra.austindwomoh.xyz` · **Interactive docs:** `/docs` (Swagger) / `/redoc`
+**Wiki:** see [`wiki/`](./wiki/Home.md) for architecture deep-dives, the enrichment pipeline, database schema, and deployment details.
 
 ---
 
-## Project Structure
+## How it works
 
 ```
-libra/
+Simplify README + JSearch API + RemoteOK API
+                │
+                ▼  List[Job]
+       Dedup (set() via Job.__hash__/__eq__)
+                │
+                ▼  valid, unique jobs
+   bulk_upsert → job_list (ON CONFLICT + COALESCE)
+                │
+                ▼  enriched=false rows
+        Enrichment pipeline (see below)
+                │
+                ▼  enriched=true
+      FastAPI read-only routes (/jobs, /company, /search, /sponsor)
+```
+
+Scraping runs on a cron schedule (5x/day); enrichment runs once/day plus on manual dispatch, so it stays decoupled from scraping and Ollama usage stays bounded.
+
+### Enrichment pipeline
+
+Three stages, each only filling fields still missing (never overwrites existing data):
+
+1. **Regex** (`Refine/extractor.py::RegexConstants`) — pay range, remote status, role type, years-of-experience, all from the description text. Includes anchor-keyword checks so bare number ranges (e.g. "3-5 years") aren't misread as salary.
+2. **LLM** (`Refine/llm.py`) — currently **Ollama** running `deepseek-r1:8b` locally (Groq is present in the code but commented out — the project moved to a free/local model). Output is JSON-repaired if malformed (`_try_repair_json`, with an optional `json_repair` library assist) and run through `JobDataSanitizer` (`Utils/sanitate.py`) to coerce types, clamp text lengths, and normalize `role_type`/`is_remote` before touching the DB.
+3. **Scrape fallback** (`Service/Scrapper.py::Pirate`) — Playwright-first (falls back to `requests`), checks for a schema.org `JobPosting` JSON-LD block first (treated as authoritative, vendor-supplied ground truth), detects expired/dead listings via known URL patterns and text signals, then re-runs regex/LLM on whatever text it recovered.
+
+Jobs whose LLM output can't be parsed even after repair get `enrich_attempts` incremented and are retried up to `MAX_ENRICH_ATTEMPTS` (3) before being marked enriched anyway, so a persistently bad response doesn't loop forever.
+
+> **Note:** the `enrich_attempts` column referenced in `Refine/refine.py` isn't in the `CREATE TABLE job_list` statement below — add it manually if your DB doesn't have it yet (`ALTER TABLE job_list ADD COLUMN enrich_attempts INT DEFAULT 0;`).
+
+---
+
+## Project structure
+
+```
+Libra/
 ├── main.py                    # FastAPI app, route definitions, lifespan
-├── requirements.txt           # Python dependencies
-├── .env                       # Environment variables (not committed)
+├── requirements.txt
 │
 ├── Service/
-│   ├── db.py                  # Async PostgreSQL connection pool + CRUD helpers
-│   └── azalea.py              # Main orchestrator: fetch → dedup → insert → enrich
+│   ├── db.py                  # Async PostgreSQL pool + CRUD helpers (COALESCE upsert)
+│   ├── azalea.py              # Orchestrator: fetch → dedup → insert → (enrich)
+│   └── Scrapper.py             # Pirate: Playwright/requests scraping, JobPosting JSON-LD, expired detection
 │
 ├── JobSource/
 │   ├── simplify.py            # Scrapes Simplify's GitHub internship README
-│   ├── jsearch.py             # JSearch API integration (OpenWebNinja)
-│   └── remote.py              # RemoteOK API integration
+│   ├── jsearch.py             # JSearch API (OpenWebNinja)
+│   └── remote.py              # RemoteOK API
 │
 ├── Refine/
-│   ├── refine.py              # Enrichment orchestrator: batches unenriched jobs
-│   ├── llm.py                 # LLM provider abstraction (GroqProvider)
-│   └── extractor.py           # Regex-based pre-processing before LLM
+│   ├── refine.py               # enrich_unenriched_jobs() — DB-driven enrichment loop
+│   ├── llm.py                  # LLMProvider ABC, OllamaProvider, LLMParseError, JSON repair
+│   └── extractor.py            # JobEnricher: regex stage, scrape stage, LLM stage orchestration
 │
 ├── Utils/
-│   ├── models.py              # Dataclasses: Job, Company, JobStats
-│   ├── constants.py           # Enums, config classes, env loading, utilities
-│   └── notify.py              # Discord webhook notifications
+│   ├── models.py               # Job, Company, JobStats dataclasses
+│   ├── constants.py            # Config, enums, LLMConstants (prompt template)
+│   ├── sanitate.py              # JobDataSanitizer — cleans/coerces raw LLM JSON
+│   └── notify.py               # Discord webhook helper
 │
 ├── Tasks/
-│   ├── scrape.py              # CLI entry point: runs full scrape + enrich cycle
-│   └── enrich.py              # Standalone enrichment task
+│   ├── scrape.py               # CLI entry point: runs Azalea.run()
+│   └── enrich.py               # Standalone enrichment task + Discord job embeds
 │
-└── Resources/
-    └── scraped_jobs.json      # JSON backup written after each scrape run
+├── docs/diagrams/               # Mermaid class + sequence diagrams (currently stale — see below)
+└── wiki/                        # Wiki source, auto-synced to the GitHub Wiki on push to master
 ```
 
 ---
 
-## Tech Stack
+## Tech stack
 
 | Layer | Library | Purpose |
 |---|---|---|
 | Web framework | FastAPI 0.117 | REST API, routing, middleware |
 | ASGI server | uvicorn 0.37 | Serve the FastAPI app |
 | Database | asyncpg 0.31 | Async PostgreSQL driver with connection pooling |
-| Scraping | BeautifulSoup4, requests | Parse Simplify GitHub README |
-| Browser automation | Playwright 1.58 | Extract job descriptions from apply pages |
-| LLM enrichment | Groq 1.0 | Structured JSON extraction from descriptions |
+| Scraping | BeautifulSoup4, requests | Parse Simplify GitHub README, static fallback scraping |
+| Browser automation | Playwright 1.58 | Extract job descriptions from apply pages (Workday, Greenhouse, etc.) |
+| LLM enrichment | Ollama (`deepseek-r1:8b`) | Structured JSON extraction from descriptions, runs locally |
 | Data processing | pandas 3.0, RapidFuzz 3.14 | Data manipulation, fuzzy deduplication |
 | Validation | Pydantic | Request/response models |
 
@@ -114,18 +112,19 @@ libra/
 
 - Python 3.10+
 - PostgreSQL database
-- API keys (see Environment Variables below)
+- [Ollama](https://ollama.com) installed locally with `deepseek-r1:8b` pulled (`ollama pull deepseek-r1:8b`)
+- API keys (see below)
 
 ### Install
 
 ```bash
-git clone https://github.com/austindwomoh23/libra.git
-cd libra
+git clone https://github.com/AustinDwomoh/Libra.git
+cd Libra
 pip install -r requirements.txt
-playwright install chromium   # for job description scraping
+playwright install chromium
 ```
 
-### Environment Variables
+### Environment variables
 
 Create a `.env` file in the project root:
 
@@ -140,21 +139,15 @@ DB_PASSWORD=your_db_password
 # Job source APIs
 JSearch_API_Key=your_jsearch_api_key
 
-# LLM enrichment
-GROQ_API_KEY=your_groq_api_key
-
 # Notifications
 DISCORD_WEBHOOK_URL=your_discord_webhook_url
 
-# Optional: alternate enrichment providers
+# Legacy / optional — Groq support is present in code but currently unused
+GROQ_API_KEY=
 GEMINI_KEY=
-GOOGLE_API_KEY=
-GOOGLE_CX=
 ```
 
 ### Database
-
-Libra expects two tables in your PostgreSQL database:
 
 ```sql
 CREATE TABLE company (
@@ -176,6 +169,7 @@ CREATE TABLE job_list (
     source TEXT,
     tags JSONB DEFAULT '{}',
     enriched BOOLEAN DEFAULT false,
+    enrich_attempts INT DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE (title, company, apply_url)
@@ -184,9 +178,7 @@ CREATE TABLE job_list (
 
 ---
 
-## Running Locally
-
-### Start the API server
+## Running locally
 
 ```bash
 python main.py
@@ -194,281 +186,35 @@ python main.py
 uvicorn main:app --host 0.0.0.0 --port 5000 --reload
 ```
 
-The API will be available at `http://localhost:5000`.
-
-### Run a full scrape + enrich cycle
-
 ```bash
-python Tasks/scrape.py
-```
-
-This will:
-1. Fetch jobs from all configured sources
-2. Deduplicate by (title, company, apply_url)
-3. Write a JSON backup to `Resources/scraped_jobs.json`
-4. Bulk upsert to the database
-5. Run the enrichment pipeline on unenriched rows
-6. Send a Discord notification with completion stats
-
-### Run enrichment only
-
-```bash
-python Tasks/enrich.py
-```
-
-Processes all rows where `enriched = false` in batches of 20.
-
----
-
-## API Reference
-
-Base URL: `http://libra.austindwomoh.xyz`
-
-All responses follow the shape:
-
-```json
-{
-  "success": true,
-  "params": { ... },
-  "jobs": [ ... ]
-}
+python Tasks/scrape.py    # full scrape + enrich cycle
+python Tasks/enrich.py    # enrichment only, processes rows where enriched=false
 ```
 
 ---
 
-### `GET /`
+## API reference
 
-Returns API metadata and a list of available endpoints.
+Base URL: `http://libra.austindwomoh.xyz`. Full details in [`wiki/API-Reference.md`](./wiki/API-Reference.md).
 
-**Response:**
-
-```json
-{
-  "api": {
-    "name": "Libra",
-    "version": "2.0",
-    "description": "Libra - Job Scraping API powered by FastAPI",
-    "author": "Austin Dwomoh",
-    "base_url": "/"
-  },
-  "endpoints": {
-    "GET /": "API documentation and metadata",
-    "GET /jobs": "Retrieve jobs with optional query parameters: limit(?limit=10)",
-    "GET /company/{company_name}": "Get jobs by company name with optional limit",
-    "GET /search/{keyword}": "Search jobs by keyword in title",
-    "GET /sponsor": "Get all jobs with likely sponsorship"
-  },
-  "notes": [
-    "All data is read-only and updated by background scrapers.",
-    "Query parameters are case-insensitive where applicable.",
-    "Use /docs for interactive Swagger UI and /redoc for ReDoc documentation."
-  ]
-}
-```
-
----
-
-### `GET /jobs`
-
-Returns all jobs ordered by most recently created.
-
-**Query parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `limit` | integer | No | Maximum number of results to return |
-
-**Example:** `GET /jobs?limit=2`
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "params": { "limit": 2 },
-  "jobs": [
-    {
-      "id": "dcf8edc2-05b4-456c-b24e-b27b9ee20ee8",
-      "company": "spectrum control",
-      "title": "Engineering Intern/Co-op",
-      "location": "Philadelphia, PA",
-      "link": "https://spectrumcontrol.wd1.myworkdayjobs.com/...",
-      "source": "simplify",
-      "remote": false,
-      "date_posted": null,
-      "description": null,
-      "tags": {},
-      "created_at": "2026-03-10T11:02:53.371494",
-      "updated_at": "2026-03-10T11:02:53.371494"
-    }
-  ]
-}
-```
-
----
-
-### `GET /company/{company_name}`
-
-Returns all jobs from a specific company. Company name must be lowercase.
-
-**Path parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `company_name` | string | Lowercase company name (e.g. `walmart`) |
-
-**Query parameters:**
-
-| Parameter | Type | Required | Description |
-|---|---|---|---|
-| `limit` | integer | No | Maximum number of results to return |
-
-**Example:** `GET /company/walmart?limit=5`
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "params": { "company_name": "walmart", "limit": 5 },
-  "jobs": [ ... ]
-}
-```
-
----
-
-### `GET /search/{keyword}`
-
-Full-text search across job titles (case-insensitive `LIKE` match).
-
-**Path parameters:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `keyword` | string | Search term to match against job titles |
-
-**Example:** `GET /search/software`
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "params": { "keyword": "software" },
-  "jobs": [ ... ]
-}
-```
-
----
-
-### `GET /sponsor`
-
-Returns jobs tagged with `sponsorship: true` — jobs where the description indicates the company sponsors H-1B visas.
-
-**Example:** `GET /sponsor`
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "params": { "sponsorship": "likely sponsorship" },
-  "jobs": [
-    {
-      "id": "ed0b2104-...",
-      "company": "copart",
-      "title": "Software Engineering Intern",
-      "location": "Dallas, TX",
-      "tags": { "sponsorship": "true" },
-      ...
-    }
-  ]
-}
-```
-
----
-
-## Key Modules
-
-### `Service/db.py` — Database Layer
-
-`JobDatabase` is a singleton that manages an async PostgreSQL connection pool (min 2, max 10 connections) with SSL support.
-
-Key methods:
-
-| Method | Description |
+| Route | Description |
 |---|---|
-| `create()` | Class method; initializes the pool |
-| `select(table, ...)` | SELECT with optional WHERE, ORDER BY, LIMIT |
-| `selectOne(table, ...)` | Returns a single row or None |
-| `upsert(table, data, conflict_column)` | INSERT … ON CONFLICT DO UPDATE with COALESCE |
-| `bulk_upsert(table, rows, conflict_column)` | Batch version of upsert |
-| `delete(table, where)` | DELETE with parameterized WHERE clause |
-
-The `COALESCE` pattern on upsert ensures that re-scraping a job never overwrites enriched fields (like `description` or `pay_range`) with `NULL`.
-
----
-
-### `Service/azalea.py` — Orchestrator
-
-`Azalea` coordinates the full scrape-to-database cycle:
-
-1. Instantiates all job source helpers
-2. Calls each source's fetch method concurrently
-3. Deduplicates using a Python `set()` (relies on `Job.__hash__` and `Job.__eq__`)
-4. Validates each job (`Job.is_valid()` checks required fields)
-5. Bulk upserts to `job_list`
-6. Hands off unenriched jobs to the enrichment pipeline
-7. Tracks per-source stats and sends a Discord notification
-
----
-
-### `Refine/llm.py` — LLM Enrichment
-
-`GroqProvider` wraps the Groq API and sends structured prompts asking for JSON output with the following fields extracted from a job description:
-
-- `title` — normalized job title
-- `location` — city/state or "Remote"
-- `is_remote` — boolean
-- `role_type` — "internship", "fulltime", "parttime", "contract"
-- `pay_range` — `[min, max]` normalized to annual USD
-- `tags` — list of skill keywords
-- `sponsorship` — `"true"` / `"false"` / `"unknown"`
-
----
-
-### `Utils/models.py` — Data Models
-
-**`Job`** — core data class for a job posting:
-
-| Field | Type | Notes |
-|---|---|---|
-| `title` | str | Required |
-| `company` | UUID | Required — references company table |
-| `location` | str | Required |
-| `apply_url` | str | Required if no description |
-| `description` | str | Required if no apply_url |
-| `source` | JobSource enum | simplify, jsearch, remoteok |
-| `is_remote` | bool | |
-| `role_type` | str | |
-| `pay_range` | list | `[min, max]` in annual USD |
-| `tags` | dict | Arbitrary key-value metadata |
-
-`Job.is_valid()` requires title, company UUID, location, and at least one of apply_url or description.
-
----
-
-## Error Responses
-
-| Status | Body |
-|---|---|
-| 404 | `{"success": false, "detail": "Endpoint not found"}` |
-| 500 | `{"success": false, "detail": "Internal server error"}` |
+| `GET /` | API metadata and endpoint list |
+| `GET /jobs?limit=N` | All jobs, newest first |
+| `GET /company/{company_name}?limit=N` | Jobs by company (lowercase name required) |
+| `GET /search/{keyword}` | Case-insensitive title search |
+| `GET /sponsor` | Jobs tagged with likely H-1B sponsorship |
 
 ---
 
 ## Deployment
 
-Libra is deployed via GitHub Actions on push to `master`. The server pulls the latest commit, restarts the uvicorn process, and the background scraping task runs on a schedule.
+Three GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy on push to `master`), `scrape.yaml` (scrape 5x/day, enrich 1x/day, both via SSH to the DigitalOcean droplet), and `notify.yaml` (Discord notifications on any push/issue activity). A fourth, `wiki-sync.yaml`, mirrors this repo's `wiki/` folder into the GitHub Wiki on push. See [`wiki/Deployment-CI-CD.md`](./wiki/Deployment-CI-CD.md) for the full breakdown.
 
-The API server runs on port 5000 and is proxied through a reverse proxy at `libra.austindwomoh.xyz`.
+---
+
+## Known gaps (see [`wiki/Roadmap.md`](./wiki/Roadmap.md) for the full list)
+
+- `enrich_attempts` column isn't in a tracked SQL migration — add manually if missing from your DB.
+- No automated test suite yet.
+- `master` requires PRs — see `.github/PULL_REQUEST_TEMPLATE.md` for the checklist enforced on every PR via the `PR Checklist` GitHub Action.
