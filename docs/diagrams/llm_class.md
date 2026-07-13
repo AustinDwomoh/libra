@@ -5,6 +5,7 @@ classDiagram
         <<abstract>>
         +complete(prompt: str) str*
         +extract(job: Job, text: str) dict
+        +_build_expired_check_prompt(text: str) str
     }
 
     class OllamaProvider {

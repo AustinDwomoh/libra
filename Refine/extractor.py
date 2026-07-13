@@ -4,6 +4,8 @@ from Refine.llm import  LLMProvider, OllamaProvider
 from Utils.constants import Config
 from Utils.models import Job
 from Service.Scrapper import Pirate
+from Service.db import JobDatabase
+
 
 # ─── Stage 1: Regex ────────────────────────────────────────────────────────────
 class RegexConstants:
@@ -205,7 +207,8 @@ class JobEnricher:
     This allows for stateful configuration and easier testing.
     """
 
-    def __init__(self, provider: Optional[LLMProvider] = None, use_llm: bool = True, llm_delay: float = 0.5):
+    def __init__(self,job_id: uuid.UUID, provider: Optional[LLMProvider] = None, use_llm: bool = True, llm_delay: float = 0.5):
+        self.job_id = job_id
         self.provider = provider or OllamaProvider()
         self.use_llm = use_llm
         self.llm_delay = llm_delay
@@ -254,7 +257,7 @@ class JobEnricher:
 
         if status == "expired":
             self.meta["stages_run"].append("scrape_expired")
-            self._mark_expired(job)
+            await self._mark_expired()
             return
 
         if status == "garbage":
@@ -286,7 +289,7 @@ class JobEnricher:
             extracted = self.provider.extract(job, scraped)
             if extracted.get("job_expired"):
                 self.meta["stages_run"].append("llm_expired")
-                return self._mark_expired(job)
+                return await self._mark_expired()
             filled = self._apply_to_job(job, extracted)
             self.meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
         Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
@@ -323,11 +326,11 @@ class JobEnricher:
         filled = self._apply_to_job(job, extracted)
         self.meta["fields_filled"].extend( f"{field} (regex)" for field in filled)
 
-    def _mark_expired(self, job: "Job"):
+    async def _mark_expired(self):
         """Shared exit path for any stage that determines the listing is expired."""
-        job.description = "This listing is no longer available."
+        db = await JobDatabase.create()
+        await db.update( table="job_list", filters={"id": self.job_id}, data={"status": "expired", "enriched": True},)
         self.meta["expired"] = True
-        Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
         Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
         
     async def _run_scrape(self, job: "Job"):
@@ -343,7 +346,7 @@ class JobEnricher:
             self.meta["stages_run"].append("structured_data")
             if scraped.get("job_expired"):
                 self.meta["stages_run"].append("structured_expired")
-                self._mark_expired(job)
+                await self._mark_expired()
                 return
             filled = self._apply_structured_data(job, scraped)
 
@@ -355,7 +358,7 @@ class JobEnricher:
                 extracted = self.provider.extract(job, job.description)
                 if extracted.get("job_expired"):
                     self.meta["stages_run"].append("llm_expired")
-                    return self._mark_expired(job)
+                    return await  self._mark_expired()
                 filled = self._apply_to_job(job, extracted)
                 self.meta["fields_filled"].extend(f"{f} (llm+structured)" for f in filled)
                 Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
@@ -408,7 +411,7 @@ class JobEnricher:
 if __name__ == "__main__":
     
     company_id = uuid.UUID("6c8333ed-7275-4565-9392-81a9aa46aa45")
-
+    job_id = uuid.uuid4()
     job1 = Job(
         title="Associate Web Developer (.Net)",
         company=company_id,
@@ -427,7 +430,7 @@ if __name__ == "__main__":
 
 
     # Swap provider here —  or GeminiProvider()
-    extractor = JobEnricher(provider=OllamaProvider(), use_llm=True, llm_delay=0.5)
+    extractor = JobEnricher(job_id=job_id, provider=OllamaProvider(), use_llm=True, llm_delay=0.5)
     meta = asyncio.run(extractor.enrich_job(job1))
 
     print("\n=== After ===")

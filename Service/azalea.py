@@ -204,9 +204,10 @@ class Azalea:
                 Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
                 try:
                     with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
-                        list_jobs = json.load(f)[:20]  # type: ignore
+                        list_jobs = json.load(f)[:5]  # type: ignore
                         for job_dict in list_jobs:
                             try:
+                                Config.logger.info(f"Loading job from JSON: {job_dict.get('title', 'unknown')} at {job_dict.get('company', 'unknown')}")
                                 company_id = UUID(job_dict.get("company", None))
                                 job = Job.from_dict(job_dict, company=company_id)
                                 self.jobs.append(job)
@@ -222,14 +223,22 @@ class Azalea:
             # ── Step 4: Insert to DB ─────────────────────────────────────────
             self._log_section("SAVING TO DATABASE")
             db = await JobDatabase.create()
-            fin_jobs = [job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown"]
+            domains_to_ignore = {"ziprecruiter"}
+            # Domains we skip when inserting — sites that reliably block scraping
+            # (bot-check pages, 403s) so enrichment/expiry checks can never get a
+            # real read on them. Add more as needed.
+            fin_jobs = [
+                job.to_dict_for_db(job)
+                for job in self.jobs
+                if job.title != "unknown"
+                and job.apply_url
+                and not any(domain in job.apply_url for domain in domains_to_ignore)
+            ]
             if not fin_jobs:
                 Config.logger.warning("No valid jobs to insert into the database")
                 return self.stats.to_dict()
-            inserted = await db.bulk_upsert(
-                "job_list", fin_jobs , conflict_column=["title", "company", "apply_url"]
-            )
-            self.stats.inserted = len(inserted)
+            inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["title", "company", "apply_url"])
+            self.stats.inserted = len(inserted) #note this isnt a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
             Config.logger.info(
                 f"Inserted {self.stats.inserted} new jobs into the database"
             )
@@ -240,10 +249,11 @@ class Azalea:
             #    enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
             #    Config.logger.info(f"Enrichment stats: {enrich_stats}")
             #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
-            # the task/ will take care of actaully calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
+            # the task/ will take care of actually calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
             if test:
-                self._log_section("ENRICHING JOBS (Groq)")
-                enrich_stats = await enrich_unenriched_jobs(batch_size=20)
+                self._log_section("ENRICHING JOBS ")
+                
+                enrich_stats = await enrich_unenriched_jobs(batch_size=5)
                 Config.logger.info(f"Enrichment stats: {enrich_stats}")
                 self.print_summary()
             return self.stats.to_dict()
@@ -260,7 +270,7 @@ def main():
     orchestrator = Azalea()
 
     try:
-        asyncio.run(orchestrator.run(position_type=PositionType.INTERN, save_json=True))
+        asyncio.run(orchestrator.run(position_type=PositionType.INTERN, save_json=True,test=True))
 
     except Exception as e:
         err_msg = f"❌ Libra scraper failed:\n```{str(e)}```"

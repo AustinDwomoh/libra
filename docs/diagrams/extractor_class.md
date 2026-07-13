@@ -3,6 +3,7 @@
 classDiagram
     class JobEnricher {
         +provider: LLMProvider
+        +job_id: uuid.UUID
         +use_llm: bool
         +llm_delay: float
         +fields_to_check: list~str~
@@ -17,7 +18,7 @@ classDiagram
         -_run_regex(job) None
         -_run_scrape(job) None
         -_handle_scraped_text(job, scraped) dict
-        -_mark_expired(job) None
+        -_mark_expired() None
     }
 
     class RegexConstants {

@@ -76,10 +76,10 @@ async def enrich_unenriched_jobs(
     # Pull a batch of unenriched jobs
     rows = await db.select(
         table="job_list",
-        filters={"enriched": False},
-        order_by="created_at ASC",
+        filters={"enriched": False, "status": "active"},
+        order_by="created_at DESC",
         limit=batch_size,
-    )
+    ) #the idea is to always newer jobs first, so we can get the most recent jobs enriched first as they are the ones that are more likely to be relevant and useful for users. This way, we can prioritize enriching the jobs that are more likely to be applied to and increase the chances of successful placements.
     
     if not rows:
         Config.logger.info("Enrichment: no unenriched jobs found.")
@@ -90,7 +90,7 @@ async def enrich_unenriched_jobs(
     for i, row in enumerate(rows):
         stats["attempted"] += 1
         job_id = row["id"]
-        enricher = JobEnricher(provider=provider, use_llm=use_llm)
+        enricher = JobEnricher(job_id=job_id, provider=provider, use_llm=use_llm)
         # Fast-path: if nothing is actually missing, just mark enriched and move on
         if not _needs_enrichment(row):
             await _mark_enriched(db, job_id)

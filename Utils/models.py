@@ -94,6 +94,8 @@ class Job:
             raise ValueError("Company must be a UUID representing the company ID")
         if not self.location:
             self.location = "Unknown"
+        if self.apply_url:
+            self.apply_url = self.strip_URL_query_params()
 
     def is_valid(self) -> bool:
         return bool(
@@ -114,6 +116,11 @@ class Job:
         val = min_sal if min_sal is not None else max_sal
         return f"${val:,}+"
 
+    def strip_URL_query_params(self) -> str | None:
+        if self.apply_url:
+            return self.apply_url.split("?", 1)[0]
+        return None
+            
     @classmethod
     def from_dict(cls, job: dict, company: uuid.UUID|None) -> "Job":
         """
@@ -189,7 +196,6 @@ class Job:
 
     def __hash__(self):
         return hash((self.title, self.company, self.location, self.apply_url))
-    
     @staticmethod
     def build_job_embed(job: dict) -> dict:
         tags = job.get("tags") or {}
