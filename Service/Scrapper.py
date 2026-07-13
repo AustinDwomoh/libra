@@ -1,10 +1,7 @@
 from bs4 import BeautifulSoup
-from typing import Optional
+from typing import Optional, Union
 
 from Utils.constants import Config
-import json, requests, asyncio, re
-from typing import Optional, Union
-from bs4 import BeautifulSoup
 import json, requests, asyncio, re
 
 
@@ -39,13 +36,20 @@ class Pirate:
             "log in to continue",
             "please sign in",
             "please enable javascript",
-            "access denied",
-            "403 forbidden",
-            "404 not found",
-            "just a moment",  # cloudflare
-            "checking your browser",  # cloudflare
+            "just a moment",  # cloudflare challenge page, served with a real 200
+            "checking your browser",  # cloudflare challenge page, served with a real 200
+            "are you a human",  # cloudflare
+            "workday is currently unavailable",  # Workday's own outage page,
+            "we are experiencing a service interruption",  # not the actual posting
             # Removed bare "sign in" / "log in" — these appear in legitimate
             # job descriptions for any auth/identity-related role.
+            # Removed "403 forbidden" / "404 not found" text signals — dead
+            # code in practice. A real 403/404 status raises via
+            # raise_for_status() (requests) or is visible on the Playwright
+            # response object before this classifier ever sees page text; by
+            # the time text classification runs, the status was already 200.
+            # Detecting a block/dead-link is now handled at the status-code
+            # level in scrape_apply_url instead (see BLOCKED_STATUS_CODES).
         ]
 
         self._SITE_EXPIRED_URL_PATTERNS = {
@@ -53,7 +57,30 @@ class Pirate:
             "myworkdayjobs.com": [r"/error", r"/notfound", r"sessionTimedOut"],
         }
 
-        self._HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; JobBot/1.0)"}
+        # Status codes that mean "the site actively blocked this request"
+        # (bot detection, rate limiting) — NOT evidence the job is expired.
+        # These are surfaced distinctly so callers don't conflate "we got
+        # blocked" with "the listing is dead" or "something is broken".
+        self.BLOCKED_STATUS_CODES = {403, 429}
+
+        # A bare UA string with no other headers is a dead giveaway of
+        # non-browser traffic to even basic bot detection. This won't
+        # defeat a determined WAF (Cloudflare/PerimeterX-style JS challenges,
+        # TLS/JA3 fingerprinting) — nothing short of a real browser can — but
+        # it avoids being trivially flagged by simpler header-sniffing checks.
+        self._HEADERS = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+        }
 
     def _is_known_expired_redirect(self, final_url: str) -> bool:
         for domain, patterns in self._SITE_EXPIRED_URL_PATTERNS.items():
@@ -126,87 +153,139 @@ class Pirate:
 
     async def scrape_apply_url(self, url: str) -> Optional[Union[str, dict]]:
         """
-        Returns a dict if a schema.org JobPosting JSON-LD block was found
-        (authoritative, vendor-supplied — caller should overwrite, not merge),
-        a str if only rendered text could be scraped (treat as a hint —
-        caller should fill gaps via regex/LLM as before), or None on failure.
+        Returns:
+          - a dict with job_expired/description/etc if a schema.org JobPosting
+            JSON-LD block was found (authoritative — caller should overwrite,
+            not merge)
+          - a dict {"blocked": True, "status_code": ...} if the site actively
+            blocked the request (403/429) — this is NOT evidence the job is
+            expired, just that this scrape attempt was refused
+          - a str if only rendered text could be scraped (treat as a hint)
+          - None on any other failure (timeout, connection error, etc.)
         """
         try:
             from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                page = await browser.new_page()
-                await page.goto(url, timeout=15000)
-                await page.wait_for_load_state("networkidle", timeout=15000)
-
-                if "myworkdayjobs.com" in url:
-                    try:
-                        await page.wait_for_selector(
-                            '[data-automation-id="jobPostingDescription"]', timeout=10000
-                        )
-                    except Exception:
-                        Config.logger.warning(
-                            "Workday job description selector never appeared — "
-                            "page may have failed to render or the listing is dead."
-                        )
-
-                if self._is_known_expired_redirect(page.url):
-                    Config.logger.warning(f"Known expired redirect detected: {page.url}")
-                    await browser.close()
-                    return None
-
-                html = await page.content()
-                jobposting = self._extract_jobposting_jsonld(html)
-                if jobposting:
-                    Config.logger.info("Found schema.org JobPosting JSON-LD — using structured data")
-                    await browser.close()  # was leaking on this path
-                    return self._jobposting_to_fields(jobposting)
-
-                if getattr(Config, "DEBUG_SCRAPE", False):
-                    await asyncio.to_thread(
-                        lambda: open("debug_page.html", "w", encoding="utf-8").write(html)
-                    )
-                    Config.logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
-
-                await page.evaluate(
-                    "document.querySelectorAll('nav,footer,header,script,style')"
-                    ".forEach(el => el.remove())"
-                )
-                await page.evaluate("""
-                    document.querySelectorAll(
-                        '[id*="cookie" i], [class*="cookie" i], ' +
-                        '[id*="consent" i], [class*="consent" i], ' +
-                        '[aria-label*="cookie" i]'
-                    ).forEach(el => el.remove())
-                """)
-
-                texts = []
-                for frame in page.frames:
-                    try:
-                        frame_text = await frame.inner_text("body")
-                        if frame_text:
-                            texts.append(frame_text)
-                    except Exception:
-                        continue
-
-                text = max(texts, key=len) if texts else ""
-                await browser.close()
-                Config.logger.info(
-                    f"Scraped with Playwright ({len(page.frames)} frame(s) checked) and length={len(text)}"
-                )
-                text = self._strip_cookie_boilerplate(text)
-                return Config.clean_ws(text)[:10000]
-
         except ImportError:
             Config.logger.warning("Playwright not installed — run: pip install playwright && playwright install chromium")
-        except Exception as e:
-            Config.logger.warning(f"Playwright failed: {e} — trying requests fallback")
+        else:
+            try:
+                async with async_playwright() as p:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        # Reduces (doesn't eliminate) trivial headless-detection
+                        # via the navigator.webdriver flag some bot checks look for.
+                        args=["--disable-blink-features=AutomationControlled"],
+                    )
+                    # try/finally guarantees this browser process is closed on
+                    # EVERY exit path — including a goto/networkidle timeout —
+                    # rather than relying on scattered .close() calls in except
+                    # blocks, which are easy to get wrong (e.g. calling .close()
+                    # on a browser that was never assigned, or closing one twice).
+                    try:
+                        context = await browser.new_context(
+                            user_agent=self._HEADERS["User-Agent"],
+                            viewport={"width": 1280, "height": 800},
+                            locale="en-US",
+                        )
+                        page = await context.new_page()
+
+                        # domcontentloaded, not networkidle, for the initial nav
+                        # — networkidle requires zero network activity for
+                        # 500ms, which analytics beacons, chat widgets, ad
+                        # pixels, or (on sites like ZipRecruiter) a bot-challenge
+                        # page's own background polling can prevent indefinitely
+                        # even though the actual content already rendered.
+                        response = await page.goto(url, timeout=15000, wait_until="domcontentloaded")
+
+                        if response is not None and response.status in self.BLOCKED_STATUS_CODES:
+                            Config.logger.warning(
+                                f"Blocked (HTTP {response.status}) loading {url} via Playwright"
+                            )
+                            return {"blocked": True, "status_code": response.status}
+
+                        # Best-effort only: give the page a shorter window to
+                        # go idle, but a page that never fully idles is common
+                        # and shouldn't discard an otherwise-successful scrape.
+                        try:
+                            await page.wait_for_load_state("networkidle", timeout=8000)
+                        except Exception:
+                            Config.logger.debug(
+                                f"{url}: networkidle not reached within budget — "
+                                "continuing anyway (common with polling/analytics)"
+                            )
+
+                        if "myworkdayjobs.com" in url:
+                            try:
+                                await page.wait_for_selector(
+                                    '[data-automation-id="jobPostingDescription"]', timeout=10000
+                                )
+                            except Exception:
+                                Config.logger.warning(
+                                    "Workday job description selector never appeared — "
+                                    "page may have failed to render or the listing is dead."
+                                )
+
+                        if self._is_known_expired_redirect(page.url):
+                            Config.logger.warning(f"Known expired redirect detected: {page.url}")
+                            return None
+
+                        html = await page.content()
+                        jobposting = self._extract_jobposting_jsonld(html)
+                        if jobposting:
+                            Config.logger.info("Found schema.org JobPosting JSON-LD — using structured data")
+                            return self._jobposting_to_fields(jobposting)
+
+                        if getattr(Config, "DEBUG_SCRAPE", False):
+                            await asyncio.to_thread(
+                                lambda: open("debug_page.html", "w", encoding="utf-8").write(html)
+                            )
+                            Config.logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
+
+                        await page.evaluate(
+                            "document.querySelectorAll('nav,footer,header,script,style')"
+                            ".forEach(el => el.remove())"
+                        )
+                        await page.evaluate("""
+                            document.querySelectorAll(
+                                '[id*="cookie" i], [class*="cookie" i], ' +
+                                '[id*="consent" i], [class*="consent" i], ' +
+                                '[aria-label*="cookie" i]'
+                            ).forEach(el => el.remove())
+                        """)
+
+                        texts = []
+                        for frame in page.frames:
+                            try:
+                                frame_text = await frame.inner_text("body")
+                                if frame_text:
+                                    texts.append(frame_text)
+                            except Exception:
+                                continue
+
+                        text = max(texts, key=len) if texts else ""
+                        Config.logger.info(
+                            f"Scraped with Playwright ({len(page.frames)} frame(s) checked) and length={len(text)}"
+                        )
+                        text = self._strip_cookie_boilerplate(text)
+                        return Config.clean_ws(text)[:10000]
+                    finally:
+                        await browser.close()
+            except Exception as e:
+                Config.logger.warning(f"Playwright failed: {e} — trying requests fallback")
 
         try:
             resp = requests.get(url, headers=self._HEADERS, timeout=10)
+
+            if resp.status_code in self.BLOCKED_STATUS_CODES:
+                Config.logger.warning(
+                    f"Blocked (HTTP {resp.status_code}) requesting {url} — treating as blocked, not expired"
+                )
+                return {"blocked": True, "status_code": resp.status_code}
+
             if self._is_known_expired_redirect(resp.url):
                 Config.logger.warning(f"Known expired redirect detected for URL: {resp.url}")
                 return None
+
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
 

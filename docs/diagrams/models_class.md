@@ -19,6 +19,7 @@ classDiagram
         +to_dict(job) dict$
         +to_dict_for_db(job) dict$
         +build_job_embed(job) dict$
+        +strip_URL_query_params()
         +__eq__(other) bool
         +__hash__() int
     }

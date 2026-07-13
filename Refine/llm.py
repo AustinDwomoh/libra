@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
-import json,re
+from typing import Optional
+import json, re
 #for when we later want to add a local model option:
 #import os,torch
 #from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
@@ -128,6 +129,63 @@ class LLMProvider(ABC):
                 f"response. Raw (truncated): {cleaned[:300]!r}"
             )
             raise LLMParseError(f"Could not parse LLM response as JSON: {e}") from e
+
+    def _build_expired_check_prompt(self, text: str) -> str:
+        # Expiry wording is almost always near the top of a posting or in a
+        # banner/interstitial, not buried at the bottom — truncate hard to
+        # keep this prompt (and the model's read of it) cheap.
+        snippet = text[:3000]
+        return (
+            "You are checking whether a scraped job-posting web page indicates "
+            "that the listing is closed, expired, filled, or no longer available.\n\n"
+            'Respond with ONLY a JSON object of the exact shape {"expired": true} '
+            'or {"expired": false} — no other text, no markdown, no explanation.\n\n'
+            'If the page clearly shows an active, open job posting, respond '
+            '{"expired": false}. If it shows any indication the posting is '
+            'closed, filled, expired, or no longer accepting applications, '
+            'respond {"expired": true}. If the text is unclear or you are '
+            'genuinely unsure, respond {"expired": false} — do not guess '
+            "expired without a clear signal.\n\n"
+            f"Page text:\n{snippet}"
+        )
+
+    def check_expired(self, text: str) -> Optional[bool]:
+        """
+        Narrow, single-purpose check: does this scraped page text indicate
+        the job listing is no longer available? Unlike extract(), this needs
+        no Job object — just the scraped text — and asks for a single boolean
+        rather than the full multi-field extraction shape.
+
+        Returns True/False, or None if the call failed or the response
+        couldn't be parsed as a clear verdict (caller should treat None as
+        inconclusive, not as "not expired").
+        """
+        prompt = self._build_expired_check_prompt(text)
+
+        try:
+            raw = self.complete(prompt)
+        except Exception as e:
+            Config.logger.warning(
+                f"[{self.__class__.__name__}] check_expired completion failed: {e}"
+            )
+            return None
+
+        Config.logger.debug(f"[{self.__class__.__name__}] Raw expired-check response: {raw!r}")
+        cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
+
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            data = _try_repair_json(cleaned)
+
+        if not isinstance(data, dict) or "expired" not in data:
+            Config.logger.warning(
+                f"[{self.__class__.__name__}] check_expired: no clear verdict in "
+                f"response (truncated): {cleaned[:200]!r}"
+            )
+            return None
+
+        return bool(data["expired"])
 
 
 # ─── Groq ──────────────────────────────────────────────────────────────────────

@@ -69,7 +69,7 @@ async def get_jobs(
 ):
     """Get all jobs ordered by most recent, with an optional limit."""
     db: JobDatabase = request.app.state.db
-    jobs = await db.select("job_list", order_by="created_at DESC", limit=limit)#type: ignore
+    jobs = await db.select("job_list",filters={"enriched": True, "status": "active"}, order_by="created_at ASC", limit=limit)#type: ignore
     return {
         "success": True,
         "params": {"limit": limit},
@@ -87,9 +87,9 @@ async def get_jobs_by_company(
     db: JobDatabase = request.app.state.db
     jobs = await db.select(
         "job_list",
-        raw_where="company = (SELECT id FROM company WHERE name = $1)",
+        raw_where="company = (SELECT id FROM company WHERE name = $1) AND enriched = true AND status = 'active'",
         raw_params=[company_name.lower()],
-        order_by="created_at DESC",
+        order_by="created_at ASC",
         limit=limit, #type: ignore
     )
     return {
@@ -105,9 +105,9 @@ async def search_jobs(keyword: str, request: Request):
     db: JobDatabase = request.app.state.db
     jobs = await db.select(
         "job_list",
-        raw_where="lower(title) LIKE $1",
+        raw_where="lower(title) LIKE $1 AND enriched = true AND status = 'active'",
         raw_params=[f"%{keyword.lower()}%"],
-        order_by="created_at DESC",
+        order_by="created_at ASC",
     )
     return {
         "success": True,
@@ -122,7 +122,7 @@ async def get_jobs_by_sponsorship(request: Request):
     db: JobDatabase = request.app.state.db
     jobs = await db.select(
         "job_list",
-        raw_where="tags->>'sponsorship' = 'true'",
+        raw_where="tags->>'sponsorship' = 'true' AND enriched = true AND status = 'active'",
         order_by="created_at DESC",
     )
     return {
