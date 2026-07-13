@@ -84,4 +84,53 @@ jobs:
            curl -H "Content-Type: application/json" \
            -d "{\"content\": \":x: <@755872891601551511>\nLibra **enrich** failed for **${{ github.repository }}** @ **${{ github.ref_name }}**\"}" \
            ${{ secrets.DISCORD_WEBHOOK }}
-  
+    
+  expired:
+    name: Expire Jobs
+    runs-on: ubuntu-latest
+    if: github.event.schedule == '0 6 * * 6' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run expiration via SSH and notify Discord with logs
+        uses: appleboy/ssh-action@v0.1.7
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          REPO: ${{ github.repository }}
+          REF: ${{ github.ref_name }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          envs: DISCORD_WEBHOOK,REPO,REF
+          script: |
+            set -uo pipefail   # no -e: a failing python run must not skip the notify step below
+
+            if [ ! -d /var/www/libra ]; then
+              echo "Directory /var/www/libra does not exist, skipping."
+              exit 0
+            fi
+
+            cd /var/www/libra/
+            source libra/bin/activate
+            mkdir -p logs
+            LOG_FILE=logs/expired.log
+
+            PYTHONPATH=/var/www/libra python3 Tasks/expired.py > "$LOG_FILE" 2>&1
+            STATUS=$?
+
+            if [ $STATUS -eq 0 ]; then
+              MSG=":white_check_mark: <@755872891601551511>\nLibra **expire** succeeded for **${REPO}** @ **${REF}**"
+            else
+              MSG=":x: <@755872891601551511>\nLibra **expire** failed for **${REPO}** @ **${REF}**"
+            fi
+
+            curl -sS \
+              -F "payload_json={\"content\": \"${MSG}\"}" \
+              -F "file1=@${LOG_FILE}" \
+              "${DISCORD_WEBHOOK}"
+
+            exit $STATUS
+
+     
