@@ -1,5 +1,7 @@
 from Utils.constants import Config
 import ssl, asyncpg, json
+from pgvector.asyncpg import register_vector
+
 
 
 class JobDatabase:
@@ -22,20 +24,25 @@ class JobDatabase:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
+        
+        async def init_connection(conn):
+            await register_vector(conn) #type: ignore
 
         cls._pool = await asyncpg.create_pool(
             host=Config.DB_HOST,
             port=Config.DB_PORT,
-            database=Config.DB_NAME,
+            database=Config.DB_NAME,    
             user=Config.DB_USER,
             password=Config.DB_PASSWORD,
             ssl=ssl_ctx,
             min_size=2,
             max_size=10,
+            init=init_connection,
         )
 
         cls._instance = cls(cls._pool)
         return cls._instance
+
 
     # ----------------------------------------------------
     #  CRUD

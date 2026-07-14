@@ -78,7 +78,7 @@ class Company:
 class Job:
     title: str
     location: str
-    is_remote: bool
+    is_remote: bool | None 
     description: str
     company: uuid.UUID | None = None
     apply_url: Optional[str] = None

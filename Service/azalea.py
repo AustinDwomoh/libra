@@ -5,7 +5,7 @@ azalea.py - Refactored main orchestrator
 import json
 from typing import List, Dict, Optional
 from uuid import UUID
-from JobSource.remote import RemoteOKHelper
+
 from Utils.models import Job, JobStats
 from Service.db import JobDatabase
 from JobSource.jsearch import JSearch
@@ -50,15 +50,7 @@ class Azalea:
             Config.logger.warning(
                 f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled."
             )
-        if Config.REMOTEOK:
-            #Todo: add a check for the REMOTEOK API key or credentials if needed
-            # Placeholder for future RemoteOK helper
-            self.helpers[JobSource.REMOTEOK] = RemoteOKHelper()
-            Config.logger.info(
-                f"✓ {JobSource.REMOTEOK.value.capitalize()} helper initialized "
-            )
-        # Placeholder for future RemoteOK helper
-
+     
 
     def _log_section(self, title: str):
         """Log a section divider"""
@@ -204,7 +196,7 @@ class Azalea:
                 Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
                 try:
                     with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
-                        list_jobs = json.load(f)[:5]  # type: ignore
+                        list_jobs = json.load(f)  # type: ignore
                         for job_dict in list_jobs:
                             try:
                                 Config.logger.info(f"Loading job from JSON: {job_dict.get('title', 'unknown')} at {job_dict.get('company', 'unknown')}")
@@ -237,7 +229,7 @@ class Azalea:
             if not fin_jobs:
                 Config.logger.warning("No valid jobs to insert into the database")
                 return self.stats.to_dict()
-            inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["title", "company", "apply_url"])
+            inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["company", "location", "title", "apply_url"])
             self.stats.inserted = len(inserted) #note this isnt a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
             Config.logger.info(
                 f"Inserted {self.stats.inserted} new jobs into the database"

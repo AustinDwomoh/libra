@@ -35,7 +35,7 @@ def _row_to_job(row: dict) -> Job:
         title=row["title"] or "unknown",
         company=row["company"],          # already a UUID from asyncpg
         location=row["location"] or "Unknown",
-        is_remote=row.get("is_remote", False),
+        is_remote=row.get("is_remote"),
         description=row.get("description") or "",
         apply_url=row.get("apply_url"),
         role_type=row.get("role_type") or "other",
@@ -86,7 +86,7 @@ async def enrich_unenriched_jobs(
         return stats
 
     Config.logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
-    
+    ENRICHED = []
     for i, row in enumerate(rows):
         stats["attempted"] += 1
         job_id = row["id"]
@@ -151,18 +151,27 @@ async def enrich_unenriched_jobs(
         try:
             payload = Job.to_dict_for_db(job)
             payload["enriched"] = True
+            payload["enrich_attempts"] = (row.get("enrich_attempts") or 0) + 1
             Config.logger.debug(f"Updating job {job_id}: {payload}")
 
-            await db.upsert("job_list", payload, conflict_column=["title", "company", "apply_url"])
+            re = await db.upsert("job_list", payload, conflict_column=["company", "location", "title", "apply_url"])
             stats["enriched"] += 1
+            ENRICHED.append(re)
         except Exception as e:
             Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
             stats["errors"] += 1
 
-        # Respect Groq free-tier rate limits
+       
+        #The idea is to keep the rows returned after the enrichment process in memory so that we can avoid re-enriching them in the same run. 
+        #As we will be using them to build the enrichment examples for the RAG pipeline. T
         if use_llm and i < len(rows) - 1:
             await asyncio.sleep(llm_delay)
 
+    for payload in ENRICHED:
+        try:
+            await maybe_promote_to_example_bank(payload, db)
+        except Exception as e:
+            Config.logger.error(f"Example bank promotion failed for {payload.get('id')}: {e}")
     Config.logger.info(
         f"Enrichment complete — attempted: {stats['attempted']}, "
         f"enriched: {stats['enriched']}, skipped: {stats['skipped']}, "
@@ -170,9 +179,68 @@ async def enrich_unenriched_jobs(
     )
     return stats
 
+async def too_similar_to_existing_example(db: JobDatabase, embedding: list[float], threshold: float = 0.95) -> bool:
+    row = await db.raw(
+        sql=f"""
+            SELECT 1 - (embedding <=> $1::vector) AS similarity
+            FROM enrichment_examples
+            ORDER BY embedding <=> $1::vector
+            LIMIT 1
+        """,
+        params=[embedding],
+    )
+    return bool(row and row["similarity"] >= threshold) #type: ignore
 
+def passes_sanity_checks(job: dict) -> bool:
+    if job.get("role_type") not in {"internship", "fulltime", "parttime", "contract"}:
+        return False
+    pay = job.get("pay_range")
+    if pay is not None:
+        if not (isinstance(pay, list) and len(pay) == 2):
+            return False
+        lo, hi = pay
+        if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float))):
+            return False
+        if lo > hi or lo < 0:
+            return False
+    if not job.get("location") or job["location"] == "Unknown":
+        return False
+    if not job.get("description") or len(job["description"]) < 50:
+        return False
+    return True
+import httpx
 
+async def embed(text: str) -> list[float]:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"http://localhost:11434/api/embeddings",
+            json={"model": "nomic-embed-text", "prompt": text},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["embedding"]
 
+async def maybe_promote_to_example_bank(job: dict, db: JobDatabase):
+    Config.logger.debug(f"Checking if job {job.get('id')} should be promoted to example bank")
+    if job.get("enrich_attempts", 0) > 1:
+        return
+    if not passes_sanity_checks(job):
+        return
+    embedding = await embed(job.get("description")) #type: ignore
+    if await too_similar_to_existing_example(db, embedding):
+        return
+    await db.upsert(
+        "enrichment_examples",
+        {
+            "source_job_id": job["id"],
+            "raw_description": job.get("description"),
+            "extracted_json": job,
+            "embedding": embedding,
+            "verified_by": "auto_clean_pass",
+        },
+        conflict_column=["source_job_id"],
+    )
+    Config.logger.info(f"Promoted job {job.get('id')} to enrichment_examples bank")
 async def _mark_enriched(db: JobDatabase, job_id: uuid.UUID):
     """Mark a job as enriched without changing other fields."""
     await db.update("job_list", data={"enriched": True}, filters={"id": job_id})
