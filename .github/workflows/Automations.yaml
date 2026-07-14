@@ -1,4 +1,5 @@
-name: Job Scraper Automation
+# This workflow is triggered on a schedule and runs the scraper, enrichment, and expiration tasks on a remote server via SSH. It also notifies a Discord channel on failure or success of the tasks.
+name: Automation
 
 on:
   schedule:
@@ -116,6 +117,9 @@ jobs:
             source libra/bin/activate
             mkdir -p logs
             LOG_FILE=logs/expired.log
+            
+            git fetch origin
+            git reset --hard origin/master
 
             PYTHONPATH=/var/www/libra python3 Tasks/expired.py > "$LOG_FILE" 2>&1
             STATUS=$?

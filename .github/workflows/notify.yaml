@@ -1,4 +1,5 @@
-name: Libra API CI/CD
+#This is a GitHub Actions workflow that notifies a Discord channel when a new issue is opened, reopened, or closed in the repository. It also notifies the channel on push events, indicating whether the deployment was successful or failed.
+name: Issues Notification  CI/CD
 
 on:
   push:

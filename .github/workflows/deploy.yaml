@@ -6,7 +6,7 @@
 # - Restarts API with systemd
 # - Discord notifications
 # =========================================
-name: Libra API CI/CD
+name: Libra Deploy CI/CD
 
 on:
   push:

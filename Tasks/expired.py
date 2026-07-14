@@ -30,18 +30,19 @@ itself, so re-running this weekly is safe and idempotent.
 """
 
 import asyncio
+from datetime import timezone
+import datetime
 import uuid
 from typing import Optional
 
 import aiohttp
 from bs4 import BeautifulSoup
-
 from Utils.constants import Config
 from Refine.llm import LLMProvider, OllamaProvider
 from Service.Scrapper import Pirate
 from Service.db import JobDatabase
-
-
+from Utils.notify import notify_discord
+from datetime import datetime, timezone
 class ExpiryChecker:
     """Escalating, expired-only re-validation pass over non-expired jobs."""
 
@@ -296,11 +297,29 @@ class ExpiryChecker:
         return self.metrics
 
 
-async def run_weekly_expiry_check() -> dict:
+async def run_weekly_expiry_check() -> None:
     """Entry point for the scheduled (cron/systemd timer) job."""
     db = await JobDatabase.create()
     checker = ExpiryChecker()
-    return await checker.run(db)
+    results = await checker.run(db)
+    embed = {
+        "title": "Weekly Expiry Check ",
+        "color": 0x5865F2 if not results['failed'] and not results['blocked'] else 0xE67E22,
+        "fields": [
+            {"name": "Checked", "value": str(results['checked']), "inline": True},
+            {"name": "Newly Expired", "value": str(results['newly_expired']), "inline": True},
+            {"name": "Failed", "value": str(results['failed']), "inline": True},
+            {"name": "Blocked", "value": str(results['blocked']), "inline": True},
+            {"name": "Tier 1", "value": str(results['resolved_tier1']), "inline": True},
+            {"name": "Tier 2", "value": str(results['resolved_tier2']), "inline": True},
+            {"name": "Tier 3", "value": str(results['resolved_tier3']), "inline": True},
+        ],
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    notify_discord(embed=embed)
+    
+  
 
 
 if __name__ == "__main__":
