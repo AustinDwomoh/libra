@@ -12,8 +12,8 @@ from Utils.notify import notify_discord
 from Service.db import JobDatabase
 
 async def main():
-    #await enrich_unenriched_jobs()
-    #notify_discord("Enrichment process completed successfully.", file_path="logs/enrich.log")
+    await enrich_unenriched_jobs()
+    notify_discord("Enrichment process completed successfully.", file_path="logs/enrich.log")
     db = await JobDatabase.create()
     columns = ["title", "location", "is_remote", "description", "apply_url", "role_type", "pay_range", "source", "tags"]
     job_list = await db.select(table="job_list", columns=columns, limit=10, order_by="updated_at DESC")
