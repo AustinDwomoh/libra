@@ -1,5 +1,5 @@
 ```mermaid
-%% classDiagram — JobEnricher orchestrator + RegexConstants (replaces old function-based extractor)
+%% classDiagram — JobEnricher orchestrator + RegexConstants
 classDiagram
     class JobEnricher {
         +provider: LLMProvider
@@ -17,7 +17,7 @@ classDiagram
         -_missing_fields(job) list~str~
         -_run_regex(job) None
         -_run_scrape(job) None
-        -_handle_scraped_text(job, scraped) dict
+        -_handle_scraped_text(job, scraped: ScrapeResult) dict
         -_mark_expired() None
     }
 
@@ -42,8 +42,14 @@ classDiagram
 
     class Pirate {
         <<Service/Scrapper.py>>
-        +scrape_apply_url(url) str|dict|None
+        +scrape_apply_url(url) ScrapeResult|dict|None
         +classify_scraped_text(text) str
+    }
+
+    class ScrapeResult {
+        <<dataclass, Service/Scrapper.py>>
+        +raw_text: str
+        +trimmed_text: str
     }
 
     class LLMProvider {
@@ -53,12 +59,15 @@ classDiagram
 
     class Job {
         <<Utils/models.py>>
+        +description: str
+        +summary: Optional[str]
     }
 
     JobEnricher --> RegexConstants : stage 1
     JobEnricher --> Pirate : stage 2 (scrape)
+    JobEnricher --> ScrapeResult : consumes .raw_text / .trimmed_text
     JobEnricher --> LLMProvider : stage 3 (LLM)
     JobEnricher --> Job : mutates in place
 
-    note for JobEnricher "meta is built once in __init__ and\nNOT reset between calls — callers\nmust create a fresh instance per job\n(see Refine/refine.py)"
+    note for JobEnricher "meta is built once in __init__ and\nNOT reset between calls — callers\nmust create a fresh instance per job\n(see Refine/refine.py).\n\ndescription is now filled directly from\nscraped.trimmed_text (capped 50000 chars),\nnot by the LLM. The LLM instead returns a\nseparate 'summary' field (2-4 sentences) and\na 'description_looks_valid' bool used only\nfor a warning, not to block the fill.\n\n_run_scrape() branches on isinstance(scraped, dict)\nfor BOTH the authoritative JobPosting dict and the\nnewer {blocked: True, status_code} dict from Pirate —\nit does not currently distinguish them, so a blocked\nscrape is treated as (empty) structured data rather\nthan retried or logged as blocked."
 ```
