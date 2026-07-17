@@ -40,7 +40,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 from Utils.constants import Config
 from Refine.llm import LLMProvider, OllamaProvider
-from Service.Scrapper import Pirate
+from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
 from Utils.notify import notify_discord
 from datetime import datetime, timezone
@@ -216,13 +216,13 @@ class ExpiryChecker:
                 return False
             text_for_llm = scraped.get("description")
         else:
-            status = self.pirate.classify_scraped_text(scraped)
+            status = self.pirate.classify_scraped_text(scraped.raw_text) #type: ignore
             if status == "expired":
                 self.metrics["resolved_tier2"] += 1
                 return True
             if status == "garbage":
                 return None  # still nothing usable — give up rather than guess
-            text_for_llm = scraped
+            text_for_llm = scraped.raw_text #type: ignore
 
         if not (self.use_llm and self.provider and text_for_llm):
             return None
