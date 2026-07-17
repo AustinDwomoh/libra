@@ -3,7 +3,7 @@ from typing import Optional
 from Refine.llm import  LLMProvider, OllamaProvider
 from Utils.constants import Config
 from Utils.models import Job
-from Service.Scrapper import Pirate
+from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
 
 
@@ -221,7 +221,7 @@ class JobEnricher:
         self.regex_constants = RegexConstants()
         self.scrapper = Pirate()
         
-    def _apply_to_job(self,job: "Job", extracted: dict) -> list[str]:
+    def _apply_to_job(self, job: "Job", extracted: dict) -> list[str]:
         """
         Write extracted fields onto the Job instance.
         Only fills fields that are currently missing.
@@ -230,72 +230,116 @@ class JobEnricher:
         filled = []
 
         for field_name, value in extracted.items():
+            # job_expired is a control signal handled by the caller (_mark_expired),
+            # never a Job attribute — skip it here regardless of whether the caller
+            # already popped it, so this function stays safe on its own.
+            if field_name == "job_expired":
+                continue
+
             if value is None:
+                continue
+
+            if field_name == "tags":
+                if not isinstance(value, dict):
+                    continue
+
+                current = job.tags
+                # tags can come back from the DB as a raw JSON string ("{}", "null")
+                # instead of a parsed dict — normalize before treating it as "existing".
+                if isinstance(current, str):
+                    try:
+                        current = json.loads(current) if current.strip() else {}
+                    except json.JSONDecodeError:
+                        current = {}
+
+                existing = current if isinstance(current, dict) else {}
+                merged = {**value, **existing}  # existing keys take priority
+                if merged != existing:  # only count it as "filled" if something new landed
+                    job.tags = merged
+                    filled.append("tags")
+                else:
+                    job.tags = merged  # still normalize the type even if nothing changed
                 continue
 
             current = getattr(job, field_name, None)
             if not Config.is_missing(current):
                 continue  # never overwrite existing data
 
-            if field_name == "tags":
-                if isinstance(value, dict):
-                    existing = job.tags or {}
-                    job.tags = {**value, **existing}  # existing keys take priority
-                    filled.append("tags")
-                continue
-
             setattr(job, field_name, value)
             filled.append(field_name)
 
         return filled
     
-    async def _handle_scraped_text( self, job: "Job", scraped: str|None|dict) -> Optional[dict]:
+    async def _handle_scraped_text(self, job: "Job", scraped: str|None|dict|ScrapeResult) -> Optional[dict]:
         if scraped is None or (isinstance(scraped, dict)):
             return
 
-        status = self.scrapper.classify_scraped_text(scraped)
-
+        status = self.scrapper.classify_scraped_text(scraped.raw_text)  #type: ignore
         if status == "expired":
             self.meta["stages_run"].append("scrape_expired")
             await self._mark_expired()
             return
-
         if status == "garbage":
             self.meta["stages_run"].append("scrape_garbage")
             return
 
         self.meta["stages_run"].append("regex_scraped")
 
+        # snapshot BEFORE filling description, so the LLM gate reflects what was
+        # actually missing when we started, not what's left after our own fill
+        was_missing_before_fill = self._missing_fields(job)
+
         if Config.is_missing(job.pay_range):
-            pay = self.regex_constants.regex_pay(scraped)
+            pay = self.regex_constants.regex_pay(scraped.raw_text) #type: ignore
             if pay:
                 job.pay_range = pay
                 self.meta["fields_filled"].append("pay_range (regex+scrape)")
 
         if Config.is_missing(job.is_remote):
-            remote = self.regex_constants.regex_remote(scraped)
+            remote = self.regex_constants.regex_remote(scraped.raw_text) #type: ignore
             if remote is not None:
                 job.is_remote = remote
                 self.meta["fields_filled"].append("is_remote (regex+scrape)")
 
         if Config.is_missing(job.role_type):
-            role = self.regex_constants.regex_role_type(scraped)
+            role = self.regex_constants.regex_role_type(scraped.raw_text) #type: ignore
             if role:
                 job.role_type = role
                 self.meta["fields_filled"].append("role_type (regex+scrape)")
 
-        if self._missing_fields(job) and self.use_llm and self.provider:
+        if Config.is_missing(job.description):
+            job.description = scraped.trimmed_text[:50000]#type:ignore
+            self.meta["fields_filled"].append("description (scraped-trimmed)")
+
+        # use the snapshot, not a fresh _missing_fields(job) call
+        if "description" in was_missing_before_fill and self.use_llm and self.provider:
             self.meta["stages_run"].append("llm_scraped")
-            extracted = self.provider.extract(job, scraped)
-            if extracted.get("job_expired"):
+            extracted = self.provider.extract(job, scraped.trimmed_text) #type: ignore
+
+            job_expired = extracted.pop("job_expired", None)
+            if job_expired:
                 self.meta["stages_run"].append("llm_expired")
                 return await self._mark_expired()
+
+            desc_valid = extracted.pop("description_looks_valid", None)
+            if desc_valid is False:
+                self.meta["stages_run"].append("description_flagged_invalid")
+                self.meta.setdefault("warnings", []).append(
+                    f"job {self.job_id}: scraped description flagged as invalid by LLM"
+                )
+
+            llm_summary = extracted.pop("summary", None)
+            if llm_summary and Config.is_missing(job.summary):
+                job.summary = llm_summary
+                self.meta["fields_filled"].append("summary (llm+scrape)")
+
             filled = self._apply_to_job(job, extracted)
             self.meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
+
         Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
         Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
         return self.meta
-
+    
     def _apply_structured_data(self, job: "Job", structured: dict) -> list[str]:
         """
         Apply schema.org JobPosting fields authoritatively. Unlike _apply_to_job,
@@ -355,18 +399,34 @@ class JobEnricher:
             if (self._missing_fields(job) and self.use_llm and self.provider ):
                 Config.logger.info(f"LLM on structured description for: {missing}")
                 self.meta["stages_run"].append("llm_structured_desc")
-                extracted = self.provider.extract(job, job.description)
-                if extracted.get("job_expired"):
+                extracted = self.provider.extract(job, scraped.get("description"))#type: ignore
+                #since if its sturtured u can just uses the get dict
+
+                job_expired = extracted.pop("job_expired", None)
+                if job_expired:
                     self.meta["stages_run"].append("llm_expired")
-                    return await  self._mark_expired()
+                    return await self._mark_expired()
+
+                desc_valid = extracted.pop("description_looks_valid", None)
+                if desc_valid is False:
+                    self.meta["stages_run"].append("description_flagged_invalid")
+                    self.meta.setdefault("warnings", []).append(
+                        f"job {self.job_id}: scraped description flagged as invalid by LLM"
+                    )
+
+                llm_summary = extracted.pop("summary", None)
+                if llm_summary and Config.is_missing(job.summary):
+                    job.summary = llm_summary
+                    self.meta["fields_filled"].append("summary (llm)")
+
                 filled = self._apply_to_job(job, extracted)
                 self.meta["fields_filled"].extend(f"{f} (llm+structured)" for f in filled)
                 Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
                 Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
                 return self.meta
            
-        Config.logger.info(f"Scraped text length: {len(scraped) if scraped else 0}")
-        Config.logger.debug(f"Scraped text: {scraped[:500] if scraped else 'None'}")
+        Config.logger.info(f"Scraped text length: raw={len(scraped.raw_text)}, trimmed={len(scraped.trimmed_text)}")  #type: ignore
+        Config.logger.debug(f"Scraped text (trimmed): {scraped.trimmed_text[:500]}")     #type: ignore
 
         await self._handle_scraped_text(job, scraped)
 

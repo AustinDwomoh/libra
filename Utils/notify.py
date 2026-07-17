@@ -1,7 +1,4 @@
-import os
-from datetime import datetime, timezone
-
-import requests
+import os,  requests, json
 from Utils.constants import Config
 
 def notify_discord(message: str = '', file_path: str = '', embed: dict = None): #type: ignore
@@ -21,7 +18,7 @@ def notify_discord(message: str = '', file_path: str = '', embed: dict = None): 
             with open(file_path, "rb") as f:
                 response = requests.post(
                     webhook_url,
-                    data={"payload_json": requests.utils.json.dumps(payload)}, #type: ignore
+                    data={"payload_json": json.dumps(payload)}, #type: ignore
                     files={"file": (os.path.basename(file_path), f)}
                 )
         else:

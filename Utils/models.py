@@ -78,7 +78,7 @@ class Company:
 class Job:
     title: str
     location: str
-    is_remote: bool
+    is_remote: bool | None 
     description: str
     company: uuid.UUID | None = None
     apply_url: Optional[str] = None
@@ -86,6 +86,7 @@ class Job:
     pay_range: Optional[list] = None #type: ignore
     source: str = "unknown"
     tags: dict[str, str] = field(default_factory=dict)
+    summary: Optional[str] = None
 
     def __post_init__(self):
         if not self.title:
@@ -145,6 +146,7 @@ class Job:
             pay_range=pay_range,
             source=job.get("source", "unknown"),
             tags=job.get("tags", {}),
+            summary=job.get("summary", ""),
         )
 
     @staticmethod
@@ -160,6 +162,7 @@ class Job:
             "pay_range": job.pay_range,
             "source": job.source,
             "tags": job.tags,
+            "summary": job.summary,
         }
 
     @staticmethod
@@ -182,6 +185,7 @@ class Job:
             "pay_range": job.pay_range,
             "source": job.source,
             "tags": tags,
+            "summary": job.summary,
         }
 
     def __eq__(self, other):
@@ -192,10 +196,11 @@ class Job:
             and self.company == other.company
             and self.location == other.location
             and self.apply_url == other.apply_url
+            and self.summary == other.summary
         )
 
     def __hash__(self):
-        return hash((self.title, self.company, self.location, self.apply_url))
+        return hash((self.title, self.company, self.location, self.apply_url, self.summary))
     @staticmethod
     def build_job_embed(job: dict) -> dict:
         tags = job.get("tags") or {}
@@ -208,8 +213,8 @@ class Job:
         description = ""
         if badges:
             description += "  ".join(f"`{b}`" for b in badges) + "\n\n"
-        if job.get("description"):
-            excerpt = job["description"][:300].rsplit(" ", 1)[0] + "..."
+        if job.get("summary"):
+            excerpt = job["summary"][:300].rsplit(" ", 1)[0] + "..."
             description += excerpt
 
         fields = [

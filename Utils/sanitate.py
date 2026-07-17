@@ -111,10 +111,20 @@ class JobDataSanitizer:
             v = v.strip()
             if not v:
                 continue
-            cleaned[k] = v[:100]
-            if len(cleaned) >= LLMConstants._MAX_TAGS:
-                break
+            cleaned[k] = v
         data["tags"] = cleaned or None
+        return data
+    def _normalise_description_valid(self, data: dict) -> dict:
+        """Coerce description_looks_valid into a strict bool, defaulting to True (fail-open)."""
+        if "description_looks_valid" not in data:
+            return data
+        value = data["description_looks_valid"]
+        if isinstance(value, bool):
+            return data
+        if isinstance(value, str) and value.strip().lower() in ("false", "no"):
+            data["description_looks_valid"] = False
+            return data
+        data["description_looks_valid"] = True
         return data
 
     def _normalise_text_fields(self, data: dict) -> dict:
@@ -165,4 +175,5 @@ class JobDataSanitizer:
         data = self._normalise_job_expired(data)
         data = self._normalise_tags(data)
         data = self._normalise_text_fields(data)
+        data = self._normalise_description_valid(data)
         return data

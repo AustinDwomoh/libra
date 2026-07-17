@@ -5,6 +5,8 @@
 > Note: This doesnt fully explain local setup as it assumes all working on it are some contact with the creators
 >
 > Join our Discord to work with us [link](https://discord.gg/Uuy5BwxGzU)
+>
+> [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
 
 <p align="center">
   <img src="./logo.svg" alt="Libra logo" width="240" />
@@ -220,3 +222,11 @@ Three GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy
 - `enrich_attempts` column isn't in a tracked SQL migration — add manually if missing from your DB.
 - No automated test suite yet.
 - `master` requires PRs — see `.github/PULL_REQUEST_TEMPLATE.md` for the checklist enforced on every PR via the `PR Checklist` GitHub Action.
+
+---
+
+## License
+
+Licensed under the [GNU Affero General Public License v3.0](LICENSE).
+
+You are free to use, modify, and distribute this software. If you deploy a modified version as a network service, you must release your source code under the same license.

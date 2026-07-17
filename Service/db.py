@@ -1,5 +1,11 @@
+from uuid import UUID
+
 from Utils.constants import Config
 import ssl, asyncpg, json
+import uuid
+import datetime
+from pgvector.asyncpg import register_vector
+from pgvector import Vector
 
 
 class JobDatabase:
@@ -22,20 +28,25 @@ class JobDatabase:
         ssl_ctx = ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = ssl.CERT_NONE
+        
+        async def init_connection(conn):
+            await register_vector(conn) #type: ignore
 
         cls._pool = await asyncpg.create_pool(
             host=Config.DB_HOST,
             port=Config.DB_PORT,
-            database=Config.DB_NAME,
+            database=Config.DB_NAME,    
             user=Config.DB_USER,
             password=Config.DB_PASSWORD,
             ssl=ssl_ctx,
             min_size=2,
             max_size=10,
+            init=init_connection,
         )
 
         cls._instance = cls(cls._pool)
         return cls._instance
+
 
     # ----------------------------------------------------
     #  CRUD
@@ -96,16 +107,45 @@ class JobDatabase:
             Config.logger.error(f"Error during selectOne from {table}: {e}")
             raise
 
+    async def get_or_create_company(self, name: str) -> UUID:
+        """Get the company ID for a given name, creating a new entry if it doesn't exist. Created for test   mOde in azalea."""
+        row = await self.selectOne(
+            "company",
+            columns=["id"],
+            filters={"lower(name)": name.lower()}
+        )
+        if row:
+            return row["id"]
+        row = await self.upsert(
+            "company",
+            data={"name": name},
+            conflict_column="name"
+        )
+        return row["id"]
     # -------------------------
     # UPSERT
     # -------------------------
+    def _serialize(self, v):
+        if isinstance(v, Vector):
+            return v       
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, default=self._json_default)
+        return v
+    
+    def _json_default(self,o):
+        if isinstance(o, uuid.UUID):
+            return str(o)
+        if isinstance(o, (datetime.datetime, datetime.date)):
+            return o.isoformat()
+       
+        raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+  
     async def upsert(self, table: str, data: dict, conflict_column: str | list | None = None)-> dict:
         try:
             columns = list(data.keys())
-            values = [
-                json.dumps(v) if isinstance(v, (dict, list)) else v
-                for v in data.values()
-            ]
+            
+            values = [self._serialize(v) for v in data.values()]
             placeholders = ", ".join(f"${i+1}" for i in range(len(values)))
             cols = ", ".join(columns)
 
@@ -142,7 +182,7 @@ class JobDatabase:
                 group = []
                 for col in columns:
                     val = row[col]
-                    values.append(json.dumps(val) if isinstance(val, (dict, list)) else val)
+                    values.append(self._serialize(val))
                     group.append(f"${param_index}")
                     param_index += 1
                 placeholder_groups.append(f"({', '.join(group)})")
