@@ -17,12 +17,22 @@ classDiagram
         +DB_PASSWORD: str
         +DISCORD_WEBHOOK: str
         +DISCLAIMER_TEXT: str
+        -file_handler: FileHandler
         +logger: Logger
         +save_to_json(jobs, filepath)$
         +strip_html(text) str$
         +clean_ws(text) str$
         +is_missing(value) bool$
         +_norm_amount(s) float$
+    }
+
+    class LLMConstants {
+        <<constants>>
+        +_LLM_PROMPT: str
+        +_MAX_PROMPT_CHARS: int
+        +_VALID_ROLE_TYPES: set
+        +_ROLE_TYPE_KEYWORDS: list
+        +_TEXT_FIELD_LIMITS: dict
     }
 
     class PositionType {
@@ -142,4 +152,9 @@ classDiagram
     }
 
     Config --> FilePaths : save_to_json default path
+    Config --> LLMConstants : logging config shared by same module
+
+    note for Config "Logging now writes to logs/run.log via a\ndedicated file_handler (DEBUG level), in\naddition to the existing basicConfig setup.\n\nis_missing() now also treats the literal\nstrings '{}', '[]', 'null', and 'None' as\nmissing, on top of the prior '', 'Unknown',\n'other', 'unknown' — guards against LLM/DB\nround-trips that stringify empty containers."
+
+    note for LLMConstants "Prompt schema changed: the old flat\n'description' field is now 'summary'\n(2-4 sentence, own-words) plus a new\n'description_looks_valid' bool. job_expired\nis now specified to never return null (only\ntrue/false). _MAX_TAGS was removed —\ntags are no longer capped at 11 entries.\n_TEXT_FIELD_LIMITS now limits 'summary'\n(500 chars) instead of 'description'."
 ```

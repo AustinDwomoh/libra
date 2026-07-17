@@ -28,11 +28,12 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Client->>App: GET /jobs?limit=N
-    App->>DB: db.select("job_list", order_by="created_at DESC", limit=N)
-    DB->>PG: SELECT * FROM job_list ORDER BY created_at DESC LIMIT N
+    App->>DB: db.select("job_list", filters={enriched: True, status: "active"}, order_by="created_at ASC", limit=N)
+    DB->>PG: SELECT * FROM job_list WHERE enriched=true AND status='active' ORDER BY created_at ASC LIMIT N
     PG-->>DB: rows
     DB-->>App: list[dict]
     App-->>Client: {success: true, params: {limit}, jobs: [...]}
+    Note over App: order_by is ASC (oldest first), not DESC —\nworth confirming this is intentional for a "recent jobs" feed.
 ```
 
 ```mermaid
@@ -44,8 +45,8 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Client->>App: GET /company/google?limit=N
-    App->>DB: db.select("job_list", raw_where="company = (SELECT id FROM company WHERE name = $1)", raw_params=["google"])
-    DB->>PG: SELECT * FROM job_list WHERE company = (subquery) ORDER BY created_at DESC LIMIT N
+    App->>DB: db.select("job_list", raw_where="company = (SELECT id FROM company WHERE name = $1) AND enriched=true AND status='active'", raw_params=["google"], order_by="created_at ASC")
+    DB->>PG: SELECT * FROM job_list WHERE company = (subquery) AND enriched=true AND status='active' ORDER BY created_at ASC LIMIT N
     PG-->>DB: rows
     DB-->>App: list[dict]
     App-->>Client: {success: true, params: {company_name, limit}, jobs: [...]}
@@ -61,11 +62,12 @@ sequenceDiagram
 
     Client->>App: GET /search/python
     App->>App: keyword.lower() → "python"
-    App->>DB: db.select("job_list", raw_where="lower(title) LIKE $1", raw_params=["%python%"])
-    DB->>PG: SELECT * FROM job_list WHERE lower(title) LIKE '%python%' ORDER BY created_at DESC
+    App->>DB: db.select("job_list", raw_where="lower(title) LIKE $1 AND enriched=true AND status='active'", raw_params=["%python%"], order_by="created_at ASC")
+    DB->>PG: SELECT * FROM job_list WHERE lower(title) LIKE '%python%' AND enriched=true AND status='active' ORDER BY created_at ASC
     PG-->>DB: rows
     DB-->>App: list[dict]
     App-->>Client: {success: true, params: {keyword}, jobs: [...]}
+    Note over App: No limit param on this route — a common keyword\ncould return the entire active, enriched table.
 ```
 
 ```mermaid
@@ -80,8 +82,8 @@ sequenceDiagram
     participant PG as PostgreSQL
 
     Client->>App: GET /sponsor
-    App->>DB: db.select("job_list", raw_where="tags->>'sponsorship' = 'true'")
-    DB->>PG: SELECT * FROM job_list WHERE tags->>'sponsorship' = 'true' ORDER BY created_at DESC
+    App->>DB: db.select("job_list", raw_where="tags->>'sponsorship' = 'true' AND enriched=true AND status='active'", order_by="created_at DESC")
+    DB->>PG: SELECT * FROM job_list WHERE tags->>'sponsorship' = 'true' AND enriched=true AND status='active' ORDER BY created_at DESC
     PG-->>DB: rows (currently always empty — no enricher sets this key)
     DB-->>App: []
     App-->>Client: {success: true, params: {sponsorship: "likely sponsorship"}, jobs: []}

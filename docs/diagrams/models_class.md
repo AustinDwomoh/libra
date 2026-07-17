@@ -13,6 +13,7 @@ classDiagram
         +pay_range: Optional[list]
         +source: str
         +tags: dict[str, str]
+        +summary: Optional[str]
         +is_valid() bool
         +get_salary_info() str
         +from_dict(job, company) Job$
@@ -78,6 +79,6 @@ classDiagram
     JobStats --> PositionType : position_type field
     JobStats --> JobSource : increment_source routing
     JobStats --> StatsKeys : to_dict keys
-    Job "hash/eq on" ..> Job : title + company + location + apply_url
+    Job "hash/eq on" ..> Job : title + company + location + apply_url + summary
 
 ```

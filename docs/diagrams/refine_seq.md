@@ -5,10 +5,12 @@ sequenceDiagram
     participant Ref as enrich_unenriched_jobs
     participant DB as JobDatabase
     participant JE as JobEnricher (fresh per job)
+    participant Bar as tqdm progress bar
 
     Task->>Ref: enrich_unenriched_jobs(batch_size=20)
-    Ref->>DB: select(job_list, filters={enriched: False}, limit=20, order_by=created_at ASC)
+    Ref->>DB: select(job_list, filters={enriched: False, status: active}, limit=20, order_by=created_at DESC)
     DB-->>Ref: rows
+    Ref->>Bar: open tqdm(total=len(rows)); start 1s background refresh thread
 
     loop each row
         Ref->>Ref: _needs_enrichment(row)
@@ -16,14 +18,14 @@ sequenceDiagram
             Ref->>DB: update(enriched=True)
             Note over Ref: stats.skipped += 1
         else needs enrichment
-            Ref->>Ref: _row_to_job(row)
+            Ref->>Ref: _row_to_job(row)  — normalizes tags if stored as a JSON string
             Ref->>JE: new JobEnricher(provider, use_llm)
             Ref->>JE: enrich_job(job)
 
             alt success
                 JE-->>Ref: meta
                 Ref->>DB: upsert(job_list, payload with enriched=True)
-                Note over Ref: stats.enriched += 1
+                Note over Ref: stats.enriched += 1, row appended to ENRICHED
             else LLMParseError raised
                 JE-->>Ref: raises LLMParseError
                 Ref->>Ref: attempts = row.enrich_attempts + 1
@@ -39,8 +41,11 @@ sequenceDiagram
                 Note over Ref: stats.errors += 1, row left enriched=False
             end
         end
-        Ref->>Ref: sleep(llm_delay) if use_llm
+        Ref->>Bar: update(1), set_postfix(enriched/skipped/errors/gave_up)
+        Ref->>Ref: sleep(llm_delay) if use_llm and not last row
     end
+
+    Note over Ref: Unlike the previous version, this loop no longer\ncalls maybe_promote_to_example_bank() at the end —\nthat pass now runs independently via Tasks/embeddings.py.
 
     Ref-->>Task: {attempted, enriched, skipped, errors, gave_up}
 ```

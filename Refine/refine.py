@@ -17,8 +17,6 @@ from Refine.llm import OllamaProvider, LLMProvider, LLMParseError
 from Utils.models import Job
 import json
 
-from the import get_job_by_id
-
 # Fields we want  to fill. Enrichment is skipped entirely if all are present.
 ENRICH_FIELDS = ("description", "is_remote", "role_type", "pay_range", "tags")
 

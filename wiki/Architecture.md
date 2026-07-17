@@ -6,54 +6,64 @@
 flowchart TD
     A[Simplify README] --> D[Azalea.fetch_all_sources]
     B[JSearch API] --> D
-    C[RemoteOK API] --> D
-    D --> E["Dedup: set() via Job.__hash__/__eq__"]
+    D --> E["Dedup: set() via Job.__hash__/__eq__ (now incl. summary)"]
     E --> F["Job.is_valid() filter"]
-    F --> G[Optional: save_to_json backup]
+    F --> G[Optional: save_to_json backup, skips ziprecruiter/bebee/lensa domains]
     F --> H["JobDatabase.bulk_upsert(job_list)"]
     H --> I["ON CONFLICT DO UPDATE + COALESCE"]
-    I --> J[enrich_unenriched_jobs]
+    I --> J["enrich_unenriched_jobs (Tasks/enrich.py, once/day)"]
     J --> K["JobEnricher: regex stage"]
-    K --> L["Pirate.scrape_apply_url: structured JobPosting or rendered text"]
-    L --> M["OllamaProvider LLM stage (deepseek-r1:8b)"]
+    K --> L["Pirate.scrape_apply_url: ScrapeResult(raw_text, trimmed_text) or structured/blocked dict"]
+    L --> M["OllamaProvider LLM stage (deepseek-r1:8b) → summary + description_looks_valid + job_expired"]
     M --> N["mark enriched = true"]
-    N --> O["FastAPI read-only routes (main.py)"]
+    N --> O["run_embedding_pass (Tasks/embeddings.py, standalone, not yet scheduled)"]
+    N --> P["FastAPI read-only routes (main.py)"]
+    N --> Q["ExpiryChecker weekly pass (Tasks/expired.py)"]
+    Q --> H
 ```
+
+Note: `RemoteOK` is a live `JobSource` enum value and appears in gating checks throughout `Azalea`, but `_init_helpers()` never actually registers a helper for it — there is no `JobSource/remote.py` file in the repo. It's effectively dead code today, not a wired-up third source. See [[Roadmap]].
 
 ## Orchestrator: `Service/azalea.py`
 
-`Azalea` is the controller. `_init_helpers()` builds a `helpers` dict keyed by `JobSource` enum — Simplify is always on, JSearch only if its API key is configured, RemoteOK via a `Config.REMOTEOK` check that's actually a hardcoded URL string (always truthy, so RemoteOK always registers regardless of any intended toggle). `run()` has two modes, both converging on the same DB-insert step:
+`Azalea` is the controller. `_init_helpers()` builds a `helpers` dict keyed by `JobSource` enum — Simplify is always on, JSearch only if its API key is configured. `run()` has two modes, both converging on the same DB-insert step:
 
 **Production mode (`test=False`, the normal path via `Tasks/scrape.py`):**
 
 1. `fetch_all_sources()` — concurrently pulls from every configured source, tags per-source counts on `self.stats` (`JobStats`)
-2. Dedup via Python `set()` — relies on `Job.__hash__`/`__eq__` keyed on `(title, company, location, apply_url)` — then filters through `Job.is_valid()`
+2. Dedup via Python `set()` — relies on `Job.__hash__`/`__eq__`, now keyed on `(title, company, location, apply_url, summary)` (the `summary` field was added to the hash/eq tuple — see [[Database-Layer]])
 3. `self.jobs = unique_jobs` — this is the key line: `self.jobs` becomes the single source of truth for the rest of `run()`, shared by both modes
-4. Optional JSON backup via `Config.save_to_json([Job.to_dict(job) for job in unique_jobs])` — note this uses `to_dict()`, not `to_dict_for_db()` (see below)
-5. `fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown"]`, then `bulk_upsert` into `job_list` with `ON CONFLICT (title, company, apply_url) DO UPDATE` — see [[Database-Layer]] for the COALESCE trick
+4. Optional JSON backup via `Config.save_to_json([Job.to_dict(job) for job in unique_jobs if not any(domain in job.apply_url for domain in domains_to_ignore)])` — the domain skip-list grew from just `{"ziprecruiter"}` to `{"ziprecruiter", "bebee", "lensa"}`
+5. `fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown" and job.apply_url and not any(domain in job.apply_url for domain in domains_to_ignore)]`, then `bulk_upsert` into `job_list` with `ON CONFLICT (company, location, title, apply_url) DO UPDATE` — see [[Database-Layer]] for the COALESCE trick
 
 **Test mode (`test=True`, used for iterating on enrichment logic without re-scraping):**
 
-1. Skips fetch/dedup entirely, loads from the local `resources/scraped_jobs.json` backup instead (max 20 jobs)
-2. Reconstructs each raw JSON dict back into a proper `Job` object via `Job.from_dict(job_dict, company=UUID(...))`, appending to `self.jobs`
-3. From here it converges with production mode: same `fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs ...]` conversion, same `bulk_upsert` call
-4. Additionally runs `enrich_unenriched_jobs(batch_size=20)` right after inserting — production mode skips this
+1. Skips fetch/dedup entirely, loads from the local `resources/scraped_jobs.json` backup instead — now capped at the **first 10** jobs (was previously the full file / 20 in older docs)
+2. Reconstructs each raw JSON dict back into a proper `Job` object via `Job.from_dict(job_dict, company=company_id)`. If the JSON's `company` field isn't a valid UUID, it now falls back to `db.get_or_create_company(job_dict.get("company_name", "Unknown"))` instead of raising — a new `JobDatabase` method (see [[Database-Layer]])
+3. From here it converges with production mode: same `fin_jobs` conversion, same `bulk_upsert` call
+4. Additionally runs `enrich_unenriched_jobs(batch_size=5)` right after inserting — tightened down from `batch_size=20` — production mode skips this entirely
 
-> ⚠️ **Bug found and fixed:** test mode used to build the DB-bound list directly from the raw JSON file, skipping the `to_dict_for_db()` conversion that normalizes `company` into a real UUID object and coerces `tags` into a proper dict. The reconstructed `Job` objects were built correctly in a loop but never actually used for the DB insert — the raw, unconverted JSON went in instead. Fixed by making `self.jobs` the shared source of truth for both modes, with the `to_dict_for_db()` conversion happening once, right before the DB call, regardless of which mode populated `self.jobs`.
+`JobDatabase.create()` is now called once at the very top of `run()`, before the test/production branch splits, rather than partway through Step 4 — needed so test mode's `get_or_create_company()` fallback has a `db` handle available during the JSON-load loop.
 
 ## Why enrichment is decoupled from scraping
 
-Scraping runs 5x/day (cron in `scrape.yaml`); enrichment only runs on the `0 5 * * *` slot (or manual dispatch). This keeps local Ollama enrichment time bounded and means a scrape failure doesn't block enrichment of already-inserted rows, and vice versa.
+Scraping runs 5x/day (`Automations.yaml`); enrichment only runs on the `0 5 * * *` slot (or manual dispatch); the weekly `ExpiryChecker` pass and the standalone embedding pass run on their own schedules (see [[Deployment-CI-CD]]). This keeps local Ollama enrichment time bounded and means a scrape failure doesn't block enrichment of already-inserted rows, and vice versa.
 
 ## The enrichment stack, at a glance
 
 ```
-Refine/refine.py       — enrich_unenriched_jobs(): DB-driven batch loop, retry-cap logic
+Refine/refine.py       — enrich_unenriched_jobs(): DB-driven batch loop, retry-cap logic, tqdm progress
     └─ Refine/extractor.py  — JobEnricher: orchestrates regex → scrape → LLM stages per job
          ├─ RegexConstants       — pay/remote/role/experience regex, anchor-keyword filtering
-         ├─ Service/Scrapper.py::Pirate  — Playwright/requests scraping, JobPosting JSON-LD, expired detection
-         └─ Refine/llm.py::OllamaProvider — local LLM extraction, JSON repair, LLMParseError
+         ├─ Service/Scrapper.py::Pirate  — Playwright/requests scraping, ScrapeResult, JobPosting JSON-LD, blocked/expired detection
+         └─ Refine/llm.py::OllamaProvider — local LLM extraction, JSON repair, LLMParseError, check_expired()
               └─ Utils/sanitate.py::JobDataSanitizer — coerces/cleans raw LLM JSON before it touches the DB
+
+Tasks/embeddings.py    — run_embedding_pass(): standalone, decoupled from the above; embeds enriched
+                          rows and promotes qualifying ones into enrichment_examples (RAG example bank)
+
+Tasks/expired.py       — ExpiryChecker.run(): three-tier (HTTP → Playwright → LLM) weekly re-validation
+                          of active jobs, reusing Pirate.scrape_apply_url() and check_expired()
 ```
 
-See [[Enrichment-Pipeline]] for the full per-stage breakdown and [[Deployment-CI-CD]] for the actual schedule/workflow wiring.
+See [[Enrichment-Pipeline]] for the full per-stage breakdown, [[Database-Layer]] for schema/`JobDatabase` details, and [[Deployment-CI-CD]] for the actual schedule/workflow wiring.
