@@ -177,10 +177,9 @@ class Config:
     logging.basicConfig(
         level=logging.DEBUG,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[logging.FileHandler("logs/run.log", encoding="utf-8")],
+        handlers=[file_handler],
         force=True,
     )
-    logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")

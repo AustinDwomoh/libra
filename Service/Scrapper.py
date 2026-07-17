@@ -351,8 +351,8 @@ class Pirate:
             for tag in soup(["nav", "footer", "script", "style", "header"]):
                 tag.decompose()
             Config.logger.info("Scraped with requests (static only)")
-            text = self._strip_cookie_boilerplate(soup.get_text(separator=" "))
-            text = self._trim_to_description(text)
+            full_text = self._strip_cookie_boilerplate(soup.get_text(separator=" "))
+            trimmed = self._trim_to_description(full_text)
             return ScrapeResult(
                 raw_text=Config.clean_ws(full_text),
                 trimmed_text=Config.clean_ws(trimmed),
