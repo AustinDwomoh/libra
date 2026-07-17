@@ -164,6 +164,8 @@ class Azalea:
         """Main orchestration method"""
 
         try:
+            db = await JobDatabase.create()
+            domains_to_ignore = {"ziprecruiter","bebee","lensa"}
             if not test:
                 # ── Step 1: Fetch ────────────────────────────────────────────
                 self.stats.reset_source_counts()
@@ -190,17 +192,21 @@ class Azalea:
 
                 # ── Step 3: Save JSON (optional) ─────────────────────────────
                 if save_json:
-                    Config.save_to_json([Job.to_dict(job) for job in unique_jobs])
+                    Config.save_to_json([Job.to_dict(job) for job in unique_jobs if not any(domain in job.apply_url for domain in domains_to_ignore)], FilePaths.SCRAPED_JOBS_JSON) #type: ignore
             else:
                 # ── TEST MODE: skip fetch/dedup, load directly from JSON ─────
                 Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
                 try:
                     with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
-                        list_jobs = json.load(f)  # type: ignore
+                        list_jobs = json.load(f)[:10]  # type: ignore
                         for job_dict in list_jobs:
                             try:
                                 Config.logger.info(f"Loading job from JSON: {job_dict.get('title', 'unknown')} at {job_dict.get('company', 'unknown')}")
+                                
                                 company_id = UUID(job_dict.get("company", None))
+                                if not company_id:
+                                    Config.logger.warning(f"Company ID missing or invalid for job: {job_dict.get('title', 'unknown')}. Skipping this job.")
+                                    company_id = await db.get_or_create_company(job_dict.get("company_name", "Unknown"))
                                 job = Job.from_dict(job_dict, company=company_id)
                                 self.jobs.append(job)
                             except Exception as e:
@@ -214,8 +220,8 @@ class Azalea:
 
             # ── Step 4: Insert to DB ─────────────────────────────────────────
             self._log_section("SAVING TO DATABASE")
-            db = await JobDatabase.create()
-            domains_to_ignore = {"ziprecruiter"}
+            
+            
             # Domains we skip when inserting — sites that reliably block scraping
             # (bot-check pages, 403s) so enrichment/expiry checks can never get a
             # real read on them. Add more as needed.

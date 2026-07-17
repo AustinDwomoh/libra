@@ -7,14 +7,17 @@ Queries the DB for jobs where enriched=false, runs the extractor pipeline
 Never re-calls Ollama on a job that has already been enriched.
 """
 
-import asyncio,uuid
+import asyncio,uuid,threading
+from tqdm import tqdm
 from typing import Optional
 from Utils.constants import Config
 from Service.db import JobDatabase
 from Refine.extractor import JobEnricher
 from Refine.llm import OllamaProvider, LLMProvider, LLMParseError
 from Utils.models import Job
+import json
 
+from the import get_job_by_id
 
 # Fields we want  to fill. Enrichment is skipped entirely if all are present.
 ENRICH_FIELDS = ("description", "is_remote", "role_type", "pay_range", "tags")
@@ -31,6 +34,14 @@ def _needs_enrichment(row: dict) -> bool:
 
 def _row_to_job(row: dict) -> Job:
     """Reconstruct a Job instance from a DB row (enough for extractor)."""
+    raw_tags = row.get("tags")
+    if isinstance(raw_tags, str):
+        try:
+            tags = json.loads(raw_tags) if raw_tags.strip() else {}
+        except json.JSONDecodeError:
+            tags = {}
+    else:
+        tags = raw_tags or {}
     return Job(
         title=row["title"] or "unknown",
         company=row["company"],          # already a UUID from asyncpg
@@ -41,9 +52,9 @@ def _row_to_job(row: dict) -> Job:
         role_type=row.get("role_type") or "other",
         pay_range=row.get("pay_range"),
         source=row.get("source") or "unknown",
-        tags=row.get("tags") or {},
+        tags=tags,
+        summary=row.get("summary"),
     )
-
 
 
 
@@ -56,6 +67,7 @@ async def enrich_unenriched_jobs(
 ) -> dict:
     """
     Main entry point.  Call this after bulk_upsert in azalea.run().
+    Its not concurrent as it uses the LLM and we want to avoid rate limits. It will process a batch of unenriched jobs, enrich them, and update the database accordingly.
 
     Args:
         provider:       LLM provider instance. Defaults to OllamaProvider().
@@ -74,12 +86,9 @@ async def enrich_unenriched_jobs(
     stats = {"attempted": 0, "enriched": 0, "skipped": 0, "errors": 0, "gave_up": 0}
 
     # Pull a batch of unenriched jobs
-    rows = await db.select(
-        table="job_list",
-        filters={"enriched": False, "status": "active"},
-        order_by="created_at DESC",
-        limit=batch_size,
-    ) #the idea is to always newer jobs first, so we can get the most recent jobs enriched first as they are the ones that are more likely to be relevant and useful for users. This way, we can prioritize enriching the jobs that are more likely to be applied to and increase the chances of successful placements.
+    rows = await db.select(table="job_list",filters={"enriched": False, "status": "active"},order_by="created_at DESC",limit=batch_size,) 
+    #the idea is to always newer jobs first, so we can get the most recent jobs enriched first as they are the ones that are more likely to be relevant and useful for users.
+    # This way, we can prioritize enriching the jobs that are more likely to be applied to and increase the chances of successful placements.
     
     if not rows:
         Config.logger.info("Enrichment: no unenriched jobs found.")
@@ -87,160 +96,121 @@ async def enrich_unenriched_jobs(
 
     Config.logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
     ENRICHED = []
-    for i, row in enumerate(rows):
-        stats["attempted"] += 1
-        job_id = row["id"]
-        enricher = JobEnricher(job_id=job_id, provider=provider, use_llm=use_llm)
-        # Fast-path: if nothing is actually missing, just mark enriched and move on
-        if not _needs_enrichment(row):
-            await _mark_enriched(db, job_id)
-            stats["skipped"] += 1
-            continue
+    with tqdm(total=len(rows), desc="Enriching jobs", unit="job", ncols=100) as pbar:
+        stop_ticker = threading.Event()
+        ticker = threading.Thread(
+            target=lambda: [
+                pbar.refresh() for _ in iter(lambda: stop_ticker.wait(1), True)
+            ],
+            daemon=True,
+        )
+        ticker.start()
+        for i, row in enumerate(rows):
+            try:
+                stats["attempted"] += 1
+                job_id = row["id"]
+                enricher = JobEnricher(job_id=job_id, provider=provider, use_llm=use_llm)
+                # Fast-path: if nothing is actually missing, just mark enriched and move on
+                if not _needs_enrichment(row):
+                    await _mark_enriched(db, job_id)
+                    stats["skipped"] += 1
+                    continue
+                
+                try:
+                    job = _row_to_job(row)
+                except (ValueError, KeyError) as e:
+                    Config.logger.warning(f"Enrichment: could not reconstruct job {job_id}: {e}")
+                    await _mark_enriched(db, job_id)   # don't retry broken rows forever
+                    stats["errors"] += 1
+                    continue
+
+                try:
+                    Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
+                    meta = await enricher.enrich_job(job)
+                    Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
+                    Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
+                except LLMParseError as e:
+                    # The model's output was unparseable even after repair attempts.
+                    # This is more likely a persistent issue (bad model, weird input
+                    # text) than a one-off blip — cap retries so we don't loop on it
+                    # forever.
+                    attempts = (row.get("enrich_attempts") or 0) + 1
+                    if attempts >= MAX_ENRICH_ATTEMPTS:
+                        Config.logger.warning(
+                            f"Enrichment: giving up on job {job_id} after {attempts} "
+                            f"unparseable LLM responses: {e}"
+                        )
+                        await db.update(
+                            "job_list",
+                            data={"enriched": True, "enrich_attempts": attempts},
+                            filters={"id": job_id},
+                        )
+                        stats["gave_up"] += 1
+                    else:
+                        Config.logger.warning(
+                            f"Enrichment: unparseable LLM response for job {job_id} "
+                            f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry: {e}"
+                        )
+                        await db.update(
+                            "job_list",
+                            data={"enrich_attempts": attempts},
+                            filters={"id": job_id},
+                        )
+                    stats["errors"] += 1
+                    continue
+                except Exception as e:
+                    # Network errors, rate limits, DB hiccups, etc. — treat as
+                    # transient and don't count against the job; just retry next run.
+                    Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
+                    stats["errors"] += 1
+                    # Don't mark enriched — will retry next run
+                    continue
+
+                # Persist enriched fields + set enriched=true
+                try:
+                    payload = Job.to_dict_for_db(job)
+                    payload["enriched"] = True
+                    payload["enrich_attempts"] = (row.get("enrich_attempts") or 0) + 1
+               
+                    Config.logger.debug(f"Updating job {job_id}: {payload}")
+
+                    re = await db.upsert("job_list", payload, conflict_column=["company", "location", "title", "apply_url"])
+                    stats["enriched"] += 1
+                    ENRICHED.append(re)
+                except Exception as e:
+                    Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
+                    stats["errors"] += 1
+
+            
+                #The idea is to keep the rows returned after the enrichment process in memory so that we can avoid re-enriching them in the same run. 
+                #As we will be using them to build the enrichment examples for the RAG pipeline. T
+                if use_llm and i < len(rows) - 1:
+                    await asyncio.sleep(llm_delay)
         
-        try:
-            job = _row_to_job(row)
-        except (ValueError, KeyError) as e:
-            Config.logger.warning(f"Enrichment: could not reconstruct job {job_id}: {e}")
-            await _mark_enriched(db, job_id)   # don't retry broken rows forever
-            stats["errors"] += 1
-            continue
-
-        try:
-            Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
-            meta = await enricher.enrich_job(job)
-            Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
-            Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
-        except LLMParseError as e:
-            # The model's output was unparseable even after repair attempts.
-            # This is more likely a persistent issue (bad model, weird input
-            # text) than a one-off blip — cap retries so we don't loop on it
-            # forever.
-            attempts = (row.get("enrich_attempts") or 0) + 1
-            if attempts >= MAX_ENRICH_ATTEMPTS:
-                Config.logger.warning(
-                    f"Enrichment: giving up on job {job_id} after {attempts} "
-                    f"unparseable LLM responses: {e}"
-                )
-                await db.update(
-                    "job_list",
-                    data={"enriched": True, "enrich_attempts": attempts},
-                    filters={"id": job_id},
-                )
-                stats["gave_up"] += 1
-            else:
-                Config.logger.warning(
-                    f"Enrichment: unparseable LLM response for job {job_id} "
-                    f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry: {e}"
-                )
-                await db.update(
-                    "job_list",
-                    data={"enrich_attempts": attempts},
-                    filters={"id": job_id},
-                )
-            stats["errors"] += 1
-            continue
-        except Exception as e:
-            # Network errors, rate limits, DB hiccups, etc. — treat as
-            # transient and don't count against the job; just retry next run.
-            Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
-            stats["errors"] += 1
-            # Don't mark enriched — will retry next run
-            continue
-
-        # Persist enriched fields + set enriched=true
-        try:
-            payload = Job.to_dict_for_db(job)
-            payload["enriched"] = True
-            payload["enrich_attempts"] = (row.get("enrich_attempts") or 0) + 1
-            Config.logger.debug(f"Updating job {job_id}: {payload}")
-
-            re = await db.upsert("job_list", payload, conflict_column=["company", "location", "title", "apply_url"])
-            stats["enriched"] += 1
-            ENRICHED.append(re)
-        except Exception as e:
-            Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
-            stats["errors"] += 1
-
-       
-        #The idea is to keep the rows returned after the enrichment process in memory so that we can avoid re-enriching them in the same run. 
-        #As we will be using them to build the enrichment examples for the RAG pipeline. T
-        if use_llm and i < len(rows) - 1:
-            await asyncio.sleep(llm_delay)
-
-    for payload in ENRICHED:
-        try:
-            await maybe_promote_to_example_bank(payload, db)
-        except Exception as e:
-            Config.logger.error(f"Example bank promotion failed for {payload.get('id')}: {e}")
+            finally:
+                pbar.update(1)
+                pbar.set_postfix({
+                    "enriched": stats["enriched"],
+                    "skipped": stats["skipped"],
+                    "errors": stats["errors"],
+                    "gave_up": stats["gave_up"],
+                })
+                        
     Config.logger.info(
         f"Enrichment complete — attempted: {stats['attempted']}, "
         f"enriched: {stats['enriched']}, skipped: {stats['skipped']}, "
         f"errors: {stats['errors']}, gave_up: {stats['gave_up']}"
+        f" — enriched job IDs: {[str(job['id']) for job in ENRICHED]}"
+        f" — enriched job titles: {[job['title'] for job in ENRICHED]}"
     )
+    
     return stats
 
-async def too_similar_to_existing_example(db: JobDatabase, embedding: list[float], threshold: float = 0.95) -> bool:
-    row = await db.raw(
-        sql=f"""
-            SELECT 1 - (embedding <=> $1::vector) AS similarity
-            FROM enrichment_examples
-            ORDER BY embedding <=> $1::vector
-            LIMIT 1
-        """,
-        params=[embedding],
-    )
-    return bool(row and row["similarity"] >= threshold) #type: ignore
 
-def passes_sanity_checks(job: dict) -> bool:
-    if job.get("role_type") not in {"internship", "fulltime", "parttime", "contract"}:
-        return False
-    pay = job.get("pay_range")
-    if pay is not None:
-        if not (isinstance(pay, list) and len(pay) == 2):
-            return False
-        lo, hi = pay
-        if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float))):
-            return False
-        if lo > hi or lo < 0:
-            return False
-    if not job.get("location") or job["location"] == "Unknown":
-        return False
-    if not job.get("description") or len(job["description"]) < 50:
-        return False
-    return True
-import httpx
-
-async def embed(text: str) -> list[float]:
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"http://localhost:11434/api/embeddings",
-            json={"model": "nomic-embed-text", "prompt": text},
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()["embedding"]
-
-async def maybe_promote_to_example_bank(job: dict, db: JobDatabase):
-    Config.logger.debug(f"Checking if job {job.get('id')} should be promoted to example bank")
-    if job.get("enrich_attempts", 0) > 1:
-        return
-    if not passes_sanity_checks(job):
-        return
-    embedding = await embed(job.get("description")) #type: ignore
-    if await too_similar_to_existing_example(db, embedding):
-        return
-    await db.upsert(
-        "enrichment_examples",
-        {
-            "source_job_id": job["id"],
-            "raw_description": job.get("description"),
-            "extracted_json": job,
-            "embedding": embedding,
-            "verified_by": "auto_clean_pass",
-        },
-        conflict_column=["source_job_id"],
-    )
-    Config.logger.info(f"Promoted job {job.get('id')} to enrichment_examples bank")
 async def _mark_enriched(db: JobDatabase, job_id: uuid.UUID):
     """Mark a job as enriched without changing other fields."""
     await db.update("job_list", data={"enriched": True}, filters={"id": job_id})
+    
+if __name__ == "__main__":
+    
+    asyncio.run(enrich_unenriched_jobs())

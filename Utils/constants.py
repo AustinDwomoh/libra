@@ -3,8 +3,10 @@ constants.py - Centralized constants and enums for the job scraping system
 """
 
 from enum import Enum
+import sys
 from typing import Final, List, Dict
 import json,re,os,logging
+
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,7 +19,6 @@ class PositionType(Enum):
     REMOTE = "remote"
     HYBRID = "hybrid"
     OTHER = "other"
-
 
 
 class JobSource(Enum):
@@ -170,11 +171,16 @@ class Config:
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
+    file_handler = logging.FileHandler("logs/run.log", encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+
     logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    force=True,
-)
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[logging.FileHandler("logs/run.log", encoding="utf-8")],
+        force=True,
+    )
+    logger = logging.getLogger(__name__)
     logger = logging.getLogger(__name__)
     GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")
@@ -185,7 +191,7 @@ class Config:
     DISCLAIMER_TEXT = "Data provided is for informational purposes only. We do not guarantee job availability or sponsorship status. Always verify details with the employer directly."
     DISCORD_WEBHOOK = os.getenv("DISCORD_WEBHOOK_URL")
     GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-
+    
     @classmethod
     def save_to_json(cls, jobs: List[Dict], filepath: str = FilePaths.SCRAPED_JOBS_JSON):
         """Save jobs to JSON file for backup/debugging"""
@@ -210,7 +216,7 @@ class Config:
         """True if a field value should be treated as unfilled."""
         if value is None:
             return True
-        if isinstance(value, str) and value.strip() in ("", "Unknown", "other", "unknown"):
+        if isinstance(value, str) and value.strip() in ("", "Unknown", "other", "unknown", "{}", "[]", "null", "None"):
             return True
         if isinstance(value, list) and (len(value) == 0 or all(v is None for v in value)):
             return True
@@ -251,7 +257,8 @@ class LLMConstants:
             "is_remote": true | false | null,
             "role_type": "full-time" | "part-time" | "contract" | "internship" | "freelance" | "other" | null,
             "pay_range": [min_number, max_number] or [min_number, null] or null,
-            "description": string or null,
+            "summary": string or null,
+            "description_looks_valid": true | false,
             "tags": {{
                 "experience_years": string or null,
                 "requirements": [string, ...],
@@ -264,12 +271,13 @@ class LLMConstants:
         }}
 
         Rules:
-        - pay_range must always be a 2-element array: [min, max]. If only one value exists, return [value, null]. Convert shorthand such as 80k to 80000. Return null if salary is not mentioned.
+        - Pay range examples: "$120,000 - $150,000" → [120000, 150000], "$45/hr" → [45, null]   (hourly rate, not annualized — do not duplicate into both slots), "80k+" → [80000, null], no salary mentioned → null
         - is_remote: true if fully remote, false if on-site or hybrid, null if unclear.
         - role_type: return "other" if it cannot be determined.
         - location: city/state/country only. Do not include street addresses.
-        - description: a clean 2–4 sentence summary of the role. Do not copy large portions of the posting.
-        - job_expired: true if the page clearly indicates the position has expired, been filled, is unavailable, or is only an error/login page.
+        - summary: a clean 2–4 sentence summary of the role, in your own words. Do not copy large portions of the posting verbatim.
+        - description_looks_valid: true if the "Job posting" text below reads as an actual, coherent job description (responsibilities, qualifications, etc). false if it looks like navigation, an error/login page, or unrelated/garbled text.
+        - job_expired: true only if the page clearly indicates the position has expired, been filled, is unavailable, or is only an error/login page. Otherwise return false. Never return null for this field.
 
         Tags:
         - experience_years: required experience (examples: "Entry Level", "3+", "5-7"), or null.
@@ -337,10 +345,10 @@ class LLMConstants:
     )
     
     
-    _MAX_TAGS = 11  # experience_years + up to 10 skills, matches the prompt schema
+
 
     
-    _TEXT_FIELD_LIMITS = {"title": 200, "location": 100, "description": 1000}
+    _TEXT_FIELD_LIMITS = {"title": 200, "location": 100, "summary": 500}
     
 
 

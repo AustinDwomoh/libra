@@ -35,14 +35,17 @@ import datetime
 import uuid
 from typing import Optional
 
-import aiohttp
+import aiohttp,threading
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 from Utils.constants import Config
 from Refine.llm import LLMProvider, OllamaProvider
 from Service.Scrapper import Pirate
 from Service.db import JobDatabase
 from Utils.notify import notify_discord
 from datetime import datetime, timezone
+
+
 class ExpiryChecker:
     """Escalating, expired-only re-validation pass over non-expired jobs."""
 
@@ -93,10 +96,11 @@ class ExpiryChecker:
         }
 
     # ─── Tier 1: cheap HTTP check ──────────────────────────────────────────
-
+   
     def _is_spa_only_domain(self, url: str) -> bool:
         return any(domain in url for domain in self.SPA_ONLY_DOMAINS)
 
+   
     def _redirect_looks_expired(self, original_url: str, final_url: str) -> bool:
         if final_url == original_url:
             return False
@@ -117,7 +121,7 @@ class ExpiryChecker:
         for tag in soup(["nav", "footer", "script", "style", "header"]):
             tag.decompose()
         return soup.get_text(separator=" ")
-
+ 
     async def _cheap_check(self, session: aiohttp.ClientSession, url: str) -> Optional[bool]:
         """True/False if confident, None if inconclusive (escalate to tier 2)."""
         headers = {"User-Agent": self.USER_AGENT}
@@ -174,6 +178,7 @@ class ExpiryChecker:
 
     # ─── Tiers 2/3: Playwright scrape, then LLM — expired signal only ─────
 
+   
     async def _deep_check(self, apply_url: str) -> Optional[bool]:
         """
         Escalation path for jobs tier 1 couldn't resolve. Runs the same
@@ -182,7 +187,7 @@ class ExpiryChecker:
         fills other fields and never needs a Job object.
         """
         scraped = await self.pirate.scrape_apply_url(apply_url)  # type: ignore
-        print(f"Scraped data for {apply_url}: {scraped}")  # Debugging line
+        
         if scraped is None:
             return None
 
@@ -240,7 +245,6 @@ class ExpiryChecker:
 
         async with self.http_semaphore:
             result = await self._cheap_check(session, url)
-            print(f"Tier 1 result for job {job_id} ({url}): {result}")  # Debugging line
         if result is not None:
             self.metrics["resolved_tier1"] += 1
             return job_id, result  # type: ignore
@@ -251,11 +255,8 @@ class ExpiryChecker:
                 await asyncio.sleep(self.llm_delay)  # respect free-tier/rate limits
         return job_id, result  # type: ignore
 
+
     async def run(self, db: "JobDatabase") -> dict:
-        """
-        Query every job not currently marked expired, run the tiered check
-        against each, and flip newly-expired ones. Returns the metrics dict.
-        """
         jobs = await db.select(
             table="job_list",
             filters={"status": "active"},
@@ -265,8 +266,32 @@ class ExpiryChecker:
         Config.logger.info(f"Weekly expiry check: {len(jobs)} non-expired jobs to check")
 
         async with aiohttp.ClientSession() as session:
-            tasks = [self._check_one(session, job) for job in jobs]
-            results = await asyncio.gather(*tasks)
+            tasks = [asyncio.create_task(self._check_one(session, job)) for job in jobs]
+
+            results = []
+            with tqdm(total=len(tasks), desc="Checking jobs", unit="job", ncols=100) as pbar:
+                stop_ticker = threading.Event()
+                ticker = threading.Thread(
+                    target=lambda: [
+                        pbar.refresh() for _ in iter(lambda: stop_ticker.wait(1), True)
+                    ],
+                    daemon=True,
+                )
+                ticker.start()
+
+                for coro in asyncio.as_completed(tasks):
+                    job_id, is_expired = await coro
+                    results.append((job_id, is_expired))
+                    pbar.update(1)
+                    pbar.set_postfix({
+                        "t1": self.metrics["resolved_tier1"],
+                        "t2": self.metrics["resolved_tier2"],
+                        "t3": self.metrics["resolved_tier3"],
+                        "blocked": self.metrics["blocked"],
+                    })
+
+                stop_ticker.set()
+                ticker.join()
 
         newly_expired_ids = []
         for job_id, is_expired in results:
@@ -278,8 +303,6 @@ class ExpiryChecker:
                 newly_expired_ids.append(job_id)
 
         if newly_expired_ids:
-            # Skip the round trip entirely when nothing changed, rather than
-            # issuing an UPDATE ... WHERE id = ANY($1) with an empty array.
             await db.raw(
                 sql="UPDATE job_list SET status = 'expired' WHERE id = ANY($1)",
                 params=[newly_expired_ids],
@@ -295,8 +318,7 @@ class ExpiryChecker:
             f"tier3: {self.metrics['resolved_tier3']})"
         )
         return self.metrics
-
-
+    
 async def run_weekly_expiry_check() -> None:
     """Entry point for the scheduled (cron/systemd timer) job."""
     db = await JobDatabase.create()
@@ -323,4 +345,5 @@ async def run_weekly_expiry_check() -> None:
 
 
 if __name__ == "__main__":
+    
     asyncio.run(run_weekly_expiry_check())

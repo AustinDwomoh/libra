@@ -3,15 +3,34 @@ from typing import Optional, Union
 
 from Utils.constants import Config
 import json, requests, asyncio, re
+from dataclasses import dataclass
 
+@dataclass
+class ScrapeResult:
+    raw_text: str = ""      # full cleaned text (cookies stripped), used for regex
+    trimmed_text: str = ""  # narrowed to Responsibilities→Qualifications window, used for description + LLM
 
 class Pirate:
+ 
     def __init__(self):
         self._COOKIE_NOTICE_RE = re.compile(
-            r"(cookie notice.{0,4000}?accept cookies)",
+            r"(accept cookies from .{0,50}browser.*)$",  # existing pattern, keep as one option
             re.IGNORECASE | re.DOTALL,
         )
-
+        self._COOKIE_BANNER_TAIL_RE = re.compile(
+            r"(decline all\s+accept all\s*)$",
+            re.IGNORECASE,
+        )
+        self. _DESC_START_MARKERS = ["responsibilities", "about the role", "about the team", "what you'll do"]
+        self._DESC_END_MARKERS = ["job information", "why join us", "diversity & inclusion", "equal employment opportunity", "accommodation"]
+        self._COOKIE_TAIL_SIGNALS = [
+            "accept cookies from",
+            "we use cookies",
+            "this site uses cookies",
+            "manage your cookies",
+            "cookie policy",
+            "cookies to provide",
+        ]
         self._EXPIRED_SIGNALS = [s.lower() for s in [
             "no longer available",
             "position has been filled",
@@ -81,7 +100,16 @@ class Pirate:
             "Sec-Fetch-Site": "none",
             "Sec-Fetch-User": "?1",
         }
-
+        
+    def _trim_to_description(self, text: str) -> str:
+        lowered = text.lower()
+        start = next((lowered.find(m) for m in self._DESC_START_MARKERS if m in lowered), -1)
+        if start == -1:
+            return text
+        end_candidates = [lowered.find(m, start) for m in self._DESC_END_MARKERS if lowered.find(m, start) != -1]
+        end = min(end_candidates) if end_candidates else len(text)
+        return text[start:end].strip()
+    
     def _is_known_expired_redirect(self, final_url: str) -> bool:
         for domain, patterns in self._SITE_EXPIRED_URL_PATTERNS.items():
             if domain in final_url:
@@ -114,8 +142,28 @@ class Pirate:
         return None
 
     def _strip_cookie_boilerplate(self, text: str) -> str:
-        return self._COOKIE_NOTICE_RE.sub(" ", text)
+        text = self._COOKIE_NOTICE_RE.sub(" ", text)          # existing pattern, keep as one option
+        text = self._COOKIE_BANNER_TAIL_RE.sub(" ", text)      # new: catches "Decline all Accept all" at the end
+        text = self._trim_trailing_cookie_banner(text)         # new: generic fallback heuristic
+        return text.strip()
 
+    def _trim_trailing_cookie_banner(self, text: str, window: int = 600) -> str:
+        """
+        Consent banners are almost always rendered as an overlay, so they show
+        up appended at the very end of scraped page text. If any known
+        cookie-banner phrase appears within the last `window` chars, cut
+        everything from that phrase onward rather than trying to match its
+        exact wording (which varies a lot by vendor).
+        """
+        tail = text[-window:].lower()
+        cut_at = None
+        for signal in self._COOKIE_TAIL_SIGNALS:
+            idx = tail.find(signal)
+            if idx != -1:
+                candidate = len(text) - window + idx
+                cut_at = candidate if cut_at is None else min(cut_at, candidate)
+        return text[:cut_at].rstrip() if cut_at is not None else text
+        
     def _jobposting_to_fields(self, posting: dict) -> dict:
         """Map a schema.org JobPosting dict onto our extracted-fields shape."""
         extracted = {}
@@ -151,7 +199,7 @@ class Pirate:
         Config.logger.info(f"Extracted structured JobPosting data: {extracted}")
         return extracted
 
-    async def scrape_apply_url(self, url: str) -> Optional[Union[str, dict]]:
+    async def scrape_apply_url(self, url: str) -> Optional[Union[str, dict]] | ScrapeResult:
         """
         Returns:
           - a dict with job_expired/description/etc if a schema.org JobPosting
@@ -235,11 +283,9 @@ class Pirate:
                             Config.logger.info("Found schema.org JobPosting JSON-LD — using structured data")
                             return self._jobposting_to_fields(jobposting)
 
-                        if getattr(Config, "DEBUG_SCRAPE", False):
-                            await asyncio.to_thread(
-                                lambda: open("debug_page.html", "w", encoding="utf-8").write(html)
-                            )
-                            Config.logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
+                        
+                        
+                        Config.logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
 
                         await page.evaluate(
                             "document.querySelectorAll('nav,footer,header,script,style')"
@@ -252,7 +298,8 @@ class Pirate:
                                 '[aria-label*="cookie" i]'
                             ).forEach(el => el.remove())
                         """)
-
+                        new_html = await page.content()
+                        
                         texts = []
                         for frame in page.frames:
                             try:
@@ -266,8 +313,15 @@ class Pirate:
                         Config.logger.info(
                             f"Scraped with Playwright ({len(page.frames)} frame(s) checked) and length={len(text)}"
                         )
-                        text = self._strip_cookie_boilerplate(text)
-                        return Config.clean_ws(text)[:10000]
+                        full_text = self._strip_cookie_boilerplate(text)
+                        trimmed = self._trim_to_description(full_text)
+                        await asyncio.to_thread(
+                                lambda: open("debug_page.html", "w", encoding="utf-8").write(text)
+                            )
+                        return ScrapeResult(
+                                        raw_text=Config.clean_ws(full_text),
+                                        trimmed_text=Config.clean_ws(trimmed),
+                                    )
                     finally:
                         await browser.close()
             except Exception as e:
@@ -298,7 +352,11 @@ class Pirate:
                 tag.decompose()
             Config.logger.info("Scraped with requests (static only)")
             text = self._strip_cookie_boilerplate(soup.get_text(separator=" "))
-            return Config.clean_ws(text)[:10000]
+            text = self._trim_to_description(text)
+            return ScrapeResult(
+                raw_text=Config.clean_ws(full_text),
+                trimmed_text=Config.clean_ws(trimmed),
+            )
         except Exception as e:
             Config.logger.warning(f"Requests scrape also failed: {e}")
             return None
