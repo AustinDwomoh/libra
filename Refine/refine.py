@@ -193,6 +193,7 @@ async def enrich_unenriched_jobs(
                     "errors": stats["errors"],
                     "gave_up": stats["gave_up"],
                 })
+        stop_ticker.set()
                         
     Config.logger.info(
         f"Enrichment complete — attempted: {stats['attempted']}, "

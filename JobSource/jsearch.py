@@ -1,5 +1,5 @@
-import asyncio
-import os
+import asyncio,os,threading
+from tqdm import tqdm
 from typing import List, Dict, Optional
 import requests,json
 from Utils.models import Job
@@ -190,30 +190,44 @@ class JSearch(JobSourceBase):
         )
 
         params = self._build_request_params(search_query, position_type, page, date_posted)
-
-        for attempt in range(retry_count):
+        stop_ticker = threading.Event()
+        with tqdm(total=retry_count, desc="Jsearch Finding Jobs", unit="job", ncols=100) as pbar:
+            ticker = threading.Thread(
+                target=lambda: [
+                    pbar.refresh() for _ in iter(lambda: stop_ticker.wait(1), True)
+                ],
+                daemon=True,
+            )
+            ticker.start()
             try:
-                response = self._make_request(params)
+                for attempt in range(retry_count):
+                    try:
+                        response = self._make_request(params)
 
-                if response.status_code in (401, 403):
-                    Config.logger.error(f"JSearch: {response.status_code} - check your API key")
-                    return []
+                        if response.status_code in (401, 403):
+                            Config.logger.error(f"JSearch: {response.status_code} - check your API key")
+                            return []
 
-                if response.status_code == 429:
-                    wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
-                    Config.logger.warning(f"JSearch: Rate limited. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})")
-                    await asyncio.sleep(wait_time)
-                    continue
+                        if response.status_code == 429:
+                            wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
+                            Config.logger.warning(f"JSearch: Rate limited. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})")
+                            await asyncio.sleep(wait_time)
+                            continue
 
-                response.raise_for_status()
-                return await self._process_response(response, search_query)
+                        response.raise_for_status()
+                        return await self._process_response(response, search_query)
 
-            except requests.RequestException as e:
-                Config.logger.error(f"JSearch API error: {e}")
-                if attempt < retry_count - 1:
-                    await asyncio.sleep(JSearchConfig.RETRY_DELAY)
-                    continue
-                return []
+                    except requests.RequestException as e:
+                        Config.logger.error(f"JSearch API error: {e}")
+                        if attempt < retry_count - 1:
+                            await asyncio.sleep(JSearchConfig.RETRY_DELAY)
+                            continue
+                        return []
+                    finally:
+                        pbar.update(1)
+            finally:
+                stop_ticker.set()
+                ticker.join(timeout=1)
 
         Config.logger.error(f"JSearch: All {retry_count} retry attempts failed")
         return []

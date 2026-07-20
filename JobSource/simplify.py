@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from Utils.models import Job
 from Utils.constants import JobSource, SimplifyConfig, Defaults, FilePaths, Config
 from JobSource.base import JobSourceBase
-
+from tqdm import tqdm
 logger = Config.logger
 
 
@@ -51,10 +51,13 @@ class Simplify(JobSourceBase):
         all_jobs = []
         self.tables_processed = 0
         
-        for table_idx, table in enumerate(tables):
-            jobs = await self._parse_single_table(table, table_idx)
-            all_jobs.extend(jobs)
-            self.tables_processed += 1
+        with tqdm(total=len(tables), desc="Simplify Parsing Tables", unit="table", ncols=100) as pbar:
+            for table_idx, table in enumerate(tables):
+                jobs = await self._parse_single_table(table, table_idx)
+                all_jobs.extend(jobs)
+                self.tables_processed += 1
+                pbar.update(1)
+
         self.jobs_found = len(all_jobs)
         logger.info(f"Simplify: Parsed {self.jobs_found} valid job entries")
         

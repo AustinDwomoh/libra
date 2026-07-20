@@ -1,0 +1,10 @@
+import functools
+
+def track_progress(func):
+    @functools.wraps(func)
+    async def wrapper(self, *args, pbar=None, **kwargs):
+        if pbar:
+            pbar.set_postfix(fn=func.__name__)
+            pbar.refresh()
+        return await func(self, *args, **kwargs)
+    return wrapper
