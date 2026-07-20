@@ -5,7 +5,7 @@ from Utils.constants import Config
 from Utils.models import Job
 from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
-
+from tqdm import tqdm
 
 # ─── Stage 1: Regex ────────────────────────────────────────────────────────────
 class RegexConstants:
@@ -458,12 +458,14 @@ class JobEnricher:
             provider = OllamaProvider()
 
         results = []
-        for i, job in enumerate(jobs):
-            Config.logger.info(f"Job {i+1}/{len(jobs)}")
-            meta = await self.enrich_job(job)
-            results.append(meta)
-            if self.use_llm and i < len(jobs) - 1:
-                await asyncio.sleep(self.llm_delay)
+        with tqdm(total=len(jobs), desc="Enriching Batch Jobs", unit="job", ncols=100) as pbar:
+            for i, job in enumerate(jobs):
+                Config.logger.info(f"Job {i+1}/{len(jobs)}")
+                meta = await self.enrich_job(job)
+                results.append(meta)
+                if self.use_llm and i < len(jobs) - 1:
+                    await asyncio.sleep(self.llm_delay)
+                pbar.update(1)
         return results
 
 # ─── Example ──────────────────────────────────────────────────────────────────

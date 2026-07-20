@@ -5,7 +5,7 @@ azalea.py - Refactored main orchestrator
 import json
 from typing import List, Dict, Optional
 from uuid import UUID
-
+from tqdm import tqdm
 from Utils.models import Job, JobStats
 from Service.db import JobDatabase
 from JobSource.jsearch import JSearch
@@ -98,31 +98,35 @@ class Azalea:
             self.stats.errors += 1
             return []
 
-    async def fetch_all_sources(
-        self,
-        position_type: PositionType = PositionType.INTERN,
-        jsearch_queries: Optional[List[str]] = None,
-    ) -> List[Job]:
+    async def fetch_all_sources( self, position_type: PositionType = PositionType.INTERN, jsearch_queries: Optional[List[str]] = None, ) -> List[Job]:
         """Fetch jobs from all available sources"""
         all_jobs = []
 
-        # Fetch from Simplify (internships only)
+        # Build the ordered list of sources we'll actually attempt, so the bar's
+        # total matches reality regardless of which helpers are configured.
+        sources_to_run = []
         if position_type in [PositionType.INTERN, PositionType.HYBRID]:
-            simplify_jobs = await self.fetch_from_source(JobSource.SIMPLIFY)
-            all_jobs.extend(simplify_jobs)
-
-        # Fetch from JSearch if available
+            sources_to_run.append(JobSource.SIMPLIFY)
         if JobSource.JSEARCH in self.helpers:
-            jsearch_jobs = await self.fetch_from_source(
-                JobSource.JSEARCH, position_type=position_type, queries=jsearch_queries
-            )
-            all_jobs.extend(jsearch_jobs)
+            sources_to_run.append(JobSource.JSEARCH)
+        sources_to_run.extend(
+            s for s in self.helpers if s not in (JobSource.SIMPLIFY, JobSource.JSEARCH)
+        )
 
-        if JobSource.REMOTEOK in self.helpers:
-            remoteok_jobs = await self.fetch_from_source(
-                JobSource.REMOTEOK, position_type=position_type
-            )
-            all_jobs.extend(remoteok_jobs)
+        with tqdm(total=len(sources_to_run), desc="Fetching all sources", unit="source", ncols=100) as pbar:
+            for source in sources_to_run:
+                pbar.set_postfix(source=source.value)
+                pbar.refresh()
+
+                if source == JobSource.JSEARCH:
+                    jobs = await self.fetch_from_source(
+                        source, position_type=position_type, queries=jsearch_queries
+                    )
+                else:
+                    jobs = await self.fetch_from_source(source, position_type=position_type)
+
+                all_jobs.extend(jobs)
+                pbar.update(1)
 
         self.stats.total_fetched = len(all_jobs)
         Config.logger.info(

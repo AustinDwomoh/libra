@@ -33,6 +33,7 @@ class JobSourceBase(ABC):
         results = [await self._map_job(job) for job in jobs if job is not None]
         return [j for j in results if j is not None]
 
+    @abstractmethod
     async def _map_job(self, _: Dict) -> Job:
         raise NotImplementedError("Subclasses must implement _map_job method")
 
