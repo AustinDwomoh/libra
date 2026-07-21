@@ -264,7 +264,8 @@ class LLMConstants:
                 "preferred": [string, ...],
                 "skills": [string, ...],
                 "technologies": [string, ...],
-                "certifications": [string, ...]
+                "certifications": [string, ...],
+                "sponsorship": true | false | null
             }} or null,
             "job_expired": true | false
         }}
@@ -285,7 +286,11 @@ class LLMConstants:
         - skills: up to 15 important technical or professional skills.
         - technologies: programming languages, frameworks, databases, cloud services, developer tools, software, etc.
         - certifications: any required or preferred certifications.
-
+        - sponsorship: true only if posting explicitly offers visa/work-auth sponsorship 
+  ("will sponsor", "sponsorship available"). false only if explicitly not offered 
+  or requires US citizenship/"US Person"/clearance, or states "no sponsorship" / 
+  "not authorized to sponsor now or in future". null if unmentioned — do not 
+  default to false just because it's not discussed.
         For tags:
         - Only extract information explicitly stated in the job posting.
         - Never invent or infer missing information.

@@ -122,7 +122,7 @@ async def get_jobs_by_sponsorship(request: Request):
     db: JobDatabase = request.app.state.db
     jobs = await db.select(
         "job_list",
-        raw_where="tags->>'sponsorship' = 'true' AND enriched = true AND status = 'active'",
+        raw_where="tags->>'sponsorship' = 'True' AND enriched = true AND status = 'active'",
         order_by="created_at DESC",
     )
     return {
