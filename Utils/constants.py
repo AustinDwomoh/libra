@@ -168,10 +168,11 @@ class Config:
     REQUEST_TIMEOUT = 30
     #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     #GOOGLE_CX = os.getenv("GOOGLE_CX")
+    LOG_FILE = os.makedirs("logs", exist_ok=True) or "logs/run.log"
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
-    file_handler = logging.FileHandler("logs/run.log", encoding="utf-8")
+    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
 
     logging.basicConfig(
