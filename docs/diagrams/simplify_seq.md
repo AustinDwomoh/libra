@@ -1,107 +1,65 @@
 ```mermaid
-%% sequenceDiagram — fetch_jobs (top-level orchestration)
-sequenceDiagram
-    participant Caller as Azalea / main
-    participant S as Simplify
-    participant GH as GitHub README URL
-
-    Caller->>S: await fetch_jobs()
-    S->>S: fetch_readme()
-    S->>GH: _fetch(self.url)
-    alt RequestException
-        GH-->>S: error
-        S-->>Caller: raises
-    else success
-        GH-->>S: HTML response
-        S->>S: self.readme_text = resp.text
-    end
-
-    S->>S: await parse_tables()
-    Note over S: see parse_tables sequence
-    S-->>S: jobs List[Job]
-
-    S->>S: log tables_processed + jobs_found
-    S-->>Caller: List[Job]
+%% flowchart — fetch_jobs (top-level orchestration)
+flowchart TD
+    A["Caller: await fetch_jobs()"] --> B["fetch_readme() → _fetch(self.url) — GitHub README URL"]
+    B --> C{RequestException?}
+    C -->|yes| D[raises to Caller]
+    C -->|no, success| E["self.readme_text = resp.text"]
+    E --> F["await parse_tables() — see parse_tables flowchart"]
+    F --> G["jobs List[Job]"]
+    G --> H["log tables_processed + jobs_found"]
+    H --> I["return List[Job] to Caller"]
 ```
 
 ```mermaid
-%% sequenceDiagram — parse_tables → _parse_single_table (HTML traversal)
-sequenceDiagram
-    participant S as Simplify
-    participant BS as BeautifulSoup
-
-    S->>BS: BeautifulSoup(readme_text, "html.parser")
-    S->>BS: find_all("table")
-    BS-->>S: tables List
-
-    loop for each table
-        S->>S: await _parse_single_table(table, table_idx)
-
-        loop for each tr in table
-            S->>S: tr.find_all("td") → tds
-            S->>S: _is_valid_row(tds)
-            alt too few columns
-                S->>S: skip row
-            else valid
-                S->>S: _update_current_company(tds, current_company)
-                Note over S: new name if col[0] != CONTINUATION_MARKER
-                alt no company yet
-                    S->>S: skip row
-                else company known
-                    S->>S: await _map_job(tds, current_company)
-                    S->>S: job.is_valid()
-                    alt valid
-                        S->>S: jobs.append(job)
-                    end
-                end
-            end
-        end
-
-        S-->>S: jobs from this table
-        S->>S: tables_processed++
-    end
-
-    S->>S: jobs_found = len(all_jobs)
-    S-->>S: all_jobs List[Job]
-
-
-
+%% flowchart — parse_tables → _parse_single_table (HTML traversal)
+flowchart TD
+    A["BeautifulSoup(readme_text, 'html.parser')"] --> B["find_all('table') → tables List"]
+    B --> C[loop for each table]
+    C --> D["await _parse_single_table(table, table_idx)"]
+    D --> E[loop for each tr in table]
+    E --> F["tr.find_all('td') → tds"]
+    F --> G["_is_valid_row(tds)"]
+    G --> H{too few columns?}
+    H -->|yes| I[skip row]
+    H -->|no, valid| J["_update_current_company(tds, current_company) —<br/>new name if col[0] != CONTINUATION_MARKER"]
+    J --> K{no company yet?}
+    K -->|yes| I
+    K -->|no, company known| L["await _map_job(tds, current_company)"]
+    L --> M["job.is_valid()"]
+    M --> N{valid?}
+    N -->|yes| O["jobs.append(job)"]
+    N -->|no| P[skip]
+    I --> Q{more tr rows?}
+    O --> Q
+    P --> Q
+    Q -->|yes| E
+    Q -->|no| R["jobs from this table; tables_processed++"]
+    R --> S{more tables?}
+    S -->|yes| C
+    S -->|no| T["jobs_found = len(all_jobs); return all_jobs List[Job]"]
 ```
 
 ```mermaid
-%% sequenceDiagram — _map_job (row → Job) and _extract_link
-sequenceDiagram
-    participant Parse as _parse_single_table
-    participant S as Simplify
-    participant DB as JobDatabase
-
-    Parse->>S: await _map_job(tds, company_name)
-    S->>S: await _upsert_company(company_name)
-    S->>DB: upsert / selectOne company
-    DB-->>S: company dict
-
-    S->>S: _extract_title(tds[1])
-    S->>S: _extract_location(tds[2])
-
-    S->>S: _extract_link(tds)
-    Note over S: try tds[3] first (standard col)
-    S->>S: _find_valid_link(tds[3])
-    alt valid href found
-        S-->>S: apply_url
-    else
-        loop tds[1:]
-            S->>S: _find_valid_link(td)
-            S->>S: _is_excluded_link(href)
-            Note over S: filter EXCLUDED_LINK_PREFIXES + DOMAINS
-            alt passes filter
-                S-->>S: apply_url
-            end
-        end
-    end
-
-    S->>S: build refined_job dict
-    Note over S: role_type="other", salary=None, source="simplify"
-    S->>S: _make_job(refined_job, company_dict)
-    S-->>Parse: Job
-
+%% flowchart — _map_job (row → Job) and _extract_link
+flowchart TD
+    A["_parse_single_table calls await _map_job(tds, company_name)"] --> B["await _upsert_company(company_name)"]
+    B --> C["upsert/selectOne company → company dict"]
+    C --> D["_extract_title(tds[1]); _extract_location(tds[2])"]
+    D --> E["_extract_link(tds) — try tds[3] first (standard col)"]
+    E --> F["_find_valid_link(tds[3])"]
+    F --> G{valid href found?}
+    G -->|yes| H[apply_url = found link]
+    G -->|no| I["loop tds[1:]"]
+    I --> J["_find_valid_link(td)"]
+    J --> K["_is_excluded_link(href) —<br/>filter EXCLUDED_LINK_PREFIXES + DOMAINS"]
+    K --> L{passes filter?}
+    L -->|yes| H
+    L -->|no| M{more tds?}
+    M -->|yes| I
+    M -->|no| N[apply_url remains unset]
+    H --> O["build refined_job dict —<br/>role_type='other', salary=None, source='simplify'"]
+    N --> O
+    O --> P["_make_job(refined_job, company_dict)"]
+    P --> Q["return Job to Parse"]
 ```

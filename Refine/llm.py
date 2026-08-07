@@ -24,7 +24,7 @@ class LLMParseError(Exception):
 def _try_repair_json(raw: str) -> dict | None:
     """
     Attempt to recover a dict from near-valid JSON. Smaller/local models
-    (e.g. Ollama qwen2.5 variants) sometimes emit trailing commas, smart
+     sometimes emit trailing commas, smart
     quotes, single-quoted keys, or stray prose around the JSON block.
     Returns the parsed dict, or None if nothing worked.
     """
@@ -44,7 +44,7 @@ def _try_repair_json(raw: str) -> dict | None:
 
     candidate = raw
 
-    # 2) Normalise smart/curly quotes to straight quotes.
+    # 2) Normalize smart/curly quotes to straight quotes.
     candidate = (
         candidate.replace("\u201c", '"').replace("\u201d", '"')
         .replace("\u2018", "'").replace("\u2019", "'")
@@ -188,45 +188,6 @@ class LLMProvider(ABC):
         return bool(data["expired"])
 
 
-# ─── Groq ──────────────────────────────────────────────────────────────────────
-#Trying to fully relly on Ollama for now, since Groq is a paid service and Ollama is free and local.
-#class GroqProvider(LLMProvider):
-#    """
-#    Groq — recommended default.
-#    Free tier: 14,400 req/day, no credit card needed.
-#    Get key: https://console.groq.com
-#
-#    pip install groq
-#    GROQ_API_KEY=your_key
-#    """
-#
-#    def __init__(self, model: str = "qwen/qwen3.6-27b"):
-#        self.model = model
-#        self._client = None
-#
-#    def _get_client(self):
-#        if self._client is None:
-#            try:
-#                from groq import Groq
-#            except ImportError:
-#                raise ImportError("Run: pip install groq")
-#            api_key = Config.GROQ_API_KEY
-#            if not api_key:
-#                raise ValueError("Set GROQ_API_KEY environment variable")
-#            self._client = Groq(api_key=api_key)
-#        return self._client
-#
-#    def complete(self, prompt: str) -> str|None:
-#        client = self._get_client()
-#        response = client.chat.completions.create(
-#            model=self.model,
-#            messages=[{"role": "user", "content": prompt}],
-#            temperature=0,
-#            response_format={"type": "json_object"},
-#        )
-#        return response.choices[0].message.content
-
-#never gonna use the Phi3
 
 # ─── Ollama (local) ────────────────────────────────────────────────────────────
 
@@ -236,7 +197,7 @@ class OllamaProvider(LLMProvider):
     Runs fully offline.
 
     pip install ollama
-    ollama pull deepseek-r1:8b  (or qwen2.5:7b, llama3.2, etc.)
+    ollama pull deepseek-r1:8b  ( llama3.2, etc.)
     """
 
     def __init__(self, model: str = "deepseek-r1:8b"):
