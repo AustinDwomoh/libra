@@ -1,87 +1,44 @@
 ```mermaid
-%% sequenceDiagram — fetch_jobs (multi-query loop with rate limiting)
-sequenceDiagram
-    participant Caller as Azalea / main
-    participant JS as JSearch
-    participant FP as fetch_positions
-
-    Caller->>JS: fetch_jobs(queries, position_type, date_posted, rate_limit_delay)
-    JS->>JS: queries = queries or JSearchConfig.DEFAULT_CATEGORIES
-
-    loop for each query[i]
-        JS->>FP: await fetch_positions(query, position_type, date_posted)
-        FP-->>JS: List[Job]
-        JS->>JS: all_jobs.extend(jobs)
-        alt not last query
-            JS->>JS: await asyncio.sleep(rate_limit_delay)
-        end
-    end
-
-    JS->>JS: list(set(all_jobs))
-    Note over JS: dedup via Job.__hash__ / __eq__
-    JS-->>Caller: unique List[Job]
-```
-
-
-```mermaid
-%% sequenceDiagram — fetch_positions (single page with retry logic)
-sequenceDiagram
-    participant JS as JSearch
-    participant API as JSearch API
-
-    JS->>JS: _build_search_query(query, position_type)
-    JS->>JS: _build_request_params(search_query, ...)
-
-    loop retry_count attempts
-        JS->>API: _make_request(params) [GET JSEARCH_API_URL]
-        API-->>JS: response
-
-        alt 401 or 403
-            JS-->>JS: log error, return []
-        else 429 Rate Limited
-            JS->>JS: await asyncio.sleep((attempt+1) * RATE_LIMIT_WAIT_MULTIPLIER)
-            JS->>JS: continue to next attempt
-        else 2xx success
-            JS->>JS: _process_response(response, search_query)
-            JS->>JS: _save_raw_jobs(jobs)
-            JS->>JS: await _map_jobs(jobs)
-            JS-->>JS: return List[Job]
-        else RequestException
-            JS->>JS: log error
-            alt attempts remain
-                JS->>JS: await asyncio.sleep(RETRY_DELAY)
-                JS->>JS: continue
-            else exhausted
-                JS-->>JS: return []
-            end
-        end
-    end
-
-    JS-->>JS: log "all retries failed", return []
-
+%% flowchart — fetch_jobs (multi-query loop with rate limiting)
+flowchart TD
+    A["Caller: fetch_jobs(queries, position_type, date_posted, rate_limit_delay)"] --> B["queries = queries or JSearchConfig.DEFAULT_CATEGORIES"]
+    B --> C[loop for each query]
+    C --> D["await fetch_positions(query, position_type, date_posted)"]
+    D --> E["all_jobs.extend(jobs)"]
+    E --> F{not last query?}
+    F -->|yes| G["await asyncio.sleep(rate_limit_delay)"]
+    G --> C
+    F -->|no| H["list(set(all_jobs)) — dedup via Job.__hash__/__eq__"]
+    H --> I[return unique List[Job] to Caller]
 ```
 
 ```mermaid
-%% sequenceDiagram — _map_job (single raw dict → Job)
-sequenceDiagram
-    participant Base as JobSourceBase._map_jobs
-    participant JS as JSearch
-    participant DB as JobDatabase
+%% flowchart — fetch_positions (single page with retry logic)
+flowchart TD
+    A["_build_search_query(query, position_type)"] --> B["_build_request_params(search_query, ...)"]
+    B --> C[loop up to retry_count attempts]
+    C --> D["_make_request(params) — GET JSEARCH_API_URL"]
+    D --> E{response status?}
+    E -->|401 or 403| F["log error, return []"]
+    E -->|429 rate limited| G["sleep (attempt+1) × RATE_LIMIT_WAIT_MULTIPLIER, continue"]
+    E -->|2xx success| H["_process_response → _save_raw_jobs → await _map_jobs → return List[Job]"]
+    E -->|RequestException| I{attempts remain?}
+    I -->|yes| J["sleep RETRY_DELAY, continue"]
+    I -->|no, exhausted| K["return []"]
+    G --> C
+    J --> C
+    C -->|all attempts exhausted| L["log 'all retries failed', return []"]
+```
 
-    Base->>JS: await _map_job(raw_job dict)
-    JS->>JS: _upsert_company(employer_name, employer_website)
-    JS->>DB: upsert / selectOne company
-    DB-->>JS: company dict
-
-    JS->>JS: employment_types = job["job_employment_types"]
-    JS->>JS: _get_position_type(employment_types)
-    Note over JS: INTERN+FULLTIME→HYBRID, else singular or OTHER
-
-    JS->>JS: _extract_salary(job)
-    Note over JS: [min, max] if both present, else None
-
-    JS->>JS: build refined_job dict
-    JS->>JS: _make_job(refined_job, company)
-    JS-->>Base: Job
-
+```mermaid
+%% flowchart — _map_job (single raw dict → Job)
+flowchart TD
+    A["JobSourceBase._map_jobs calls await _map_job(raw_job dict)"] --> B["_upsert_company(employer_name, employer_website)"]
+    B --> C["upsert/selectOne company → company dict"]
+    C --> D["employment_types = job['job_employment_types']"]
+    D --> E["_get_position_type(employment_types)<br/>(INTERN+FULLTIME→HYBRID, else singular or OTHER)"]
+    E --> F["_extract_salary(job) — [min, max] if both present, else None"]
+    F --> G[build refined_job dict]
+    G --> H["_make_job(refined_job, company)"]
+    H --> I[return Job to Base]
 ```

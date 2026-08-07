@@ -240,7 +240,7 @@ class Azalea:
                 Config.logger.warning("No valid jobs to insert into the database")
                 return self.stats.to_dict()
             inserted = await db.bulk_upsert("job_list", fin_jobs[:10] , conflict_column=["company", "location", "title", "apply_url"])
-            self.stats.inserted = len(inserted) #note this isnt a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
+            self.stats.inserted = len(inserted) #note this isn't a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
             Config.logger.info(
                 f"Inserted {self.stats.inserted} new jobs into the database"
             )
@@ -251,7 +251,7 @@ class Azalea:
             #    enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
             #    Config.logger.info(f"Enrichment stats: {enrich_stats}")
             #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
-            # the task/ will take care of actually calling and enricnhng the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
+            # the task/ will take care of actually calling and enriching the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
             if test:
                 self._log_section("ENRICHING JOBS ")
                 

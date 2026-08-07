@@ -1,33 +1,18 @@
 ```mermaid
-%% sequenceDiagram — Tasks/enrich.py main() (DB fetch → Discord embed post)
-sequenceDiagram
-    participant Entry as __main__
-    participant DB as JobDatabase
-    participant Job as Job.build_job_embed
-    participant Discord as Discord Webhook
-
-    Entry->>DB: await JobDatabase.create()
-    DB-->>Entry: db instance
-
-    Entry->>DB: select(job_list, columns=[...], limit=10, order_by=updated_at DESC)
-    DB-->>Entry: job_list list[dict]
-
-    Entry->>Entry: Config.DISCORD_WEBHOOK?
-    alt no webhook URL
-        Entry-->>Entry: return early
-    end
-
-    loop for each job in job_list
-        Entry->>Job: Job.build_job_embed(job)
-        Job-->>Entry: payload dict (Discord embed)
-
-        Entry->>Discord: requests.post(webhook_url, json=payload, timeout=10)
-        alt RequestException
-            Discord-->>Entry: error
-            Entry->>Entry: logger.error(...)
-        else success
-            Discord-->>Entry: 2xx
-        end
-    end
-
+%% flowchart — Tasks/enrich.py main() (DB fetch → Discord embed post)
+flowchart TD
+    A["__main__ entry"] --> B["await JobDatabase.create() → db instance"]
+    B --> C["select(job_list, columns=[...], limit=10, order_by=updated_at DESC)"]
+    C --> D{Config.DISCORD_WEBHOOK set?}
+    D -->|no| Z[return early]
+    D -->|yes| E[loop for each job in job_list]
+    E --> F["Job.build_job_embed(job) → payload dict"]
+    F --> G["requests.post(webhook_url, json=payload, timeout=10)"]
+    G --> H{RequestException?}
+    H -->|yes| I["logger.error(...)"]
+    H -->|no| J[2xx success]
+    I --> K{more jobs?}
+    J --> K
+    K -->|yes| E
+    K -->|no| L[done]
 ```
