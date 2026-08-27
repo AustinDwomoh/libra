@@ -30,7 +30,7 @@ Case-insensitive `LIKE` match on `title` only (not `description` or `summary`). 
 
 ## `GET /sponsor`
 
-Jobs where `tags->>'sponsorship' = 'true'`, ordered `created_at DESC`. This is meant to be an LLM-assigned tag (see `_LLM_PROMPT` in [[Enrichment-Pipeline]]) — but the current tags schema doesn't actually include a `sponsorship` key anywhere (it produces `experience_years`, `requirements`, `preferred`, `skills`, `technologies`, `certifications`). As written, this route will always return an empty list until either the prompt schema adds a sponsorship signal or this route is pointed at a different field. Not independently verified either way, hence the disclaimer text in `Config.DISCLAIMER_TEXT`.
+Jobs where `tags->>'sponsorship' = 'True'`, ordered `created_at DESC`. This is an LLM-assigned tag (see `_LLM_PROMPT` in [[Enrichment-Pipeline]]) — the prompt now asks for a `sponsorship: true | false | null` key alongside `experience_years`, `requirements`, `preferred`, `skills`, `technologies`, `certifications`. `JobDataSanitizer._normalise_tags()` stringifies non-string tag values via Python's `str(v)`, so a `sponsorship: true` from the LLM ends up stored in `tags` as the literal string `"True"` (capital T) — which is exactly what this route's filter now matches, deliberately. So the route is wired up end-to-end, assuming the LLM reliably emits the key; it's just a string-equality check riding on `str(bool)`'s exact capitalization rather than an explicit cast or `LOWER()`, which is fragile if that stringification behavior ever changes. Not independently verified against live data, hence the disclaimer text in `Config.DISCLAIMER_TEXT`.
 
 ## Error responses
 
@@ -46,4 +46,4 @@ Jobs where `tags->>'sponsorship' = 'true'`, ordered `created_at DESC`. This is m
 - No auth — fully open CORS (`allow_origins=["*"]`)
 - `company_name` lowercase requirement isn't documented anywhere except this wiki page and the (old) README
 - `/jobs` and `/company` order `ASC`, `/sponsor` orders `DESC` — check this is intentional before relying on either
-- `/sponsor` is currently dead — no enrichment path sets `tags->>'sponsorship'`
+- `/sponsor` now has a real signal to filter on (`tags->>'sponsorship'`, set since issue #18) but the query matches the literal string `'True'`, not a boolean — see [[Roadmap]] for why that's fragile

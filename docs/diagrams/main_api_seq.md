@@ -21,7 +21,7 @@ flowchart TD
 ```mermaid
 %% flowchart — GET /company/{company_name} (jobs by company)
 flowchart TD
-    A["Client: GET /company/google?limit=N"] --> B["db.select('job_list', raw_where='company = (SELECT id FROM company WHERE name = $1) AND enriched=true AND status=\'active\'', raw_params=['google'], order_by='created_at ASC')"]
+    A["Client: GET /company/google?limit=N"] --> B["db.select('job_list', raw_where=#quot;company = (SELECT id FROM company WHERE name = $1) AND enriched=true AND status='active'#quot;, raw_params=['google'], order_by='created_at ASC')"]
     B --> C["PostgreSQL: subquery + filters, LIMIT N"]
     C --> D[rows returned]
     D --> E["response: {success: true, params: {company_name, limit}, jobs: [...]}"]
@@ -31,7 +31,7 @@ flowchart TD
 %% flowchart — GET /search/{keyword} (title keyword search)
 flowchart TD
     A["Client: GET /search/python"] --> B["keyword.lower() → 'python'"]
-    B --> C["db.select('job_list', raw_where=\"lower(title) LIKE $1 AND enriched=true AND status='active'\", raw_params=['%python%'], order_by='created_at ASC')"]
+    B --> C["db.select('job_list', raw_where=#quot;lower(title) LIKE $1 AND enriched=true AND status='active'#quot;, raw_params=['%python%'], order_by='created_at ASC')"]
     C --> D["PostgreSQL: LIKE query, NO LIMIT applied"]
     D --> E[rows returned]
     E --> F["response: {success: true, params: {keyword}, jobs: [...]}<br/>Note: no limit param on this route — a common keyword<br/>could return the entire active, enriched table."]
@@ -39,14 +39,18 @@ flowchart TD
 
 ```mermaid
 %% flowchart — GET /sponsor (sponsorship tag filter)
-%% BUG: tags->>'sponsorship' is never set by the enrichment pipeline.
-%% The LLM prompt populates skill_0..N and experience_years, not a sponsorship key.
-%% This endpoint will always return an empty list until the enrichment tags schema is updated.
+%% As of issue #18 the LLM prompt does populate tags.sponsorship (true/false/null).
+%% JobDataSanitizer._normalise_tags() stringifies non-str tag values via Python's
+%% str(v), so a bool True/False lands in the DB as the literal string "True"/"False"
+%% (capital T), not JSON's lowercase "true"/"false". The raw_where filter below was
+%% updated to match that capitalization, so this route is no longer guaranteed-empty —
+%% but it's still a fragile string match riding on str(bool)'s exact output rather than
+%% an explicit cast, and depends on the LLM actually emitting the key. See Roadmap.
 flowchart TD
-    A["Client: GET /sponsor"] --> B["db.select('job_list', raw_where=\"tags->>'sponsorship' = 'true' AND enriched=true AND status='active'\", order_by='created_at DESC')"]
+    A["Client: GET /sponsor"] --> B["db.select('job_list', raw_where=#quot;tags->>'sponsorship' = 'True' AND enriched=true AND status='active'#quot;, order_by='created_at DESC')"]
     B --> C["PostgreSQL executes query"]
-    C --> D["rows — currently ALWAYS empty (no enricher sets this key)"]
-    D --> E["response: {success: true, params: {sponsorship: 'likely sponsorship'}, jobs: []}"]
+    C --> D["rows — non-empty whenever the LLM tagged a job\nsponsorship: true and JobDataSanitizer stored it as 'True'"]
+    D --> E["response: {success: true, params: {sponsorship: 'likely sponsorship'}, jobs: [...]}"]
 ```
 
 ```mermaid

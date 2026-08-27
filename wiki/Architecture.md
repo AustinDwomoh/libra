@@ -5,11 +5,11 @@
 ```mermaid
 flowchart TD
     A[Simplify README] --> D[Azalea.fetch_all_sources]
-    B[JSearch API] --> D
-    D --> E["Dedup: set() via Job.__hash__/__eq__ (now incl. summary)"]
-    E --> F["Job.is_valid() filter"]
-    F --> G[Optional: save_to_json backup, skips ziprecruiter/bebee/lensa domains]
-    F --> H["JobDatabase.bulk_upsert(job_list)"]
+    B[Speedy README] --> D
+    C[JSearch API] --> D
+    D --> E["Filter Job.is_valid(), then dedupe: walk in scrape\norder building a seen-set by hand, via\nJob.__hash__/__eq__ (title+company+location+apply_url+summary)"]
+    E --> G[Optional: save_to_json backup, skips ziprecruiter/bebee/lensa domains]
+    E --> H["JobDatabase.bulk_upsert(job_list[:10])<br/>hard-capped to the first 10 rows — see Roadmap"]
     H --> I["ON CONFLICT DO UPDATE + COALESCE"]
     I --> J["enrich_unenriched_jobs (Tasks/enrich.py, once/day)"]
     J --> K["JobEnricher: regex stage"]
@@ -22,19 +22,19 @@ flowchart TD
     Q --> H
 ```
 
-Note: `RemoteOK` is a live `JobSource` enum value and appears in gating checks throughout `Azalea`, but `_init_helpers()` never actually registers a helper for it — there is no `JobSource/remote.py` file in the repo. It's effectively dead code today, not a wired-up third source. See [[Roadmap]].
+Note: `Speedy` is a new source, always-registered in `_init_helpers()` same as `Simplify`. `JSearch` registers the same way it always has — conditionally, based on whether `J_SEARCH_API_KEY` is set.
 
 ## Orchestrator: `Service/azalea.py`
 
-`Azalea` is the controller. `_init_helpers()` builds a `helpers` dict keyed by `JobSource` enum — Simplify is always on, JSearch only if its API key is configured. `run()` has two modes, both converging on the same DB-insert step:
+`Azalea` is the controller. `_init_helpers()` builds a `helpers` dict keyed by `JobSource` enum — Simplify and Speedy are both always on, JSearch only if its API key is configured. `run()` has two modes, both converging on the same DB-insert step:
 
 **Production mode (`test=False`, the normal path via `Tasks/scrape.py`):**
 
-1. `fetch_all_sources()` — concurrently pulls from every configured source, tags per-source counts on `self.stats` (`JobStats`)
-2. Dedup via Python `set()` — relies on `Job.__hash__`/`__eq__`, now keyed on `(title, company, location, apply_url, summary)` (the `summary` field was added to the hash/eq tuple — see [[Database-Layer]])
+1. `fetch_all_sources()` — builds an ordered `sources_to_run` list (Simplify if `position_type` is INTERN/HYBRID, JSearch if registered, then every other registered helper, i.e. Speedy), then pulls from each under a `tqdm` progress bar, tagging per-source counts on `self.stats` (`JobStats`)
+2. Filter to `job.is_valid()`, then dedupe by walking the valid jobs in scrape order and building a seen-set by hand (no longer `list(set(...))`) — relies on `Job.__hash__`/`__eq__`, keyed on `(title, company, location, apply_url, summary)` (see [[Database-Layer]])
 3. `self.jobs = unique_jobs` — this is the key line: `self.jobs` becomes the single source of truth for the rest of `run()`, shared by both modes
-4. Optional JSON backup via `Config.save_to_json([Job.to_dict(job) for job in unique_jobs if not any(domain in job.apply_url for domain in domains_to_ignore)])` — the domain skip-list grew from just `{"ziprecruiter"}` to `{"ziprecruiter", "bebee", "lensa"}`
-5. `fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown" and job.apply_url and not any(domain in job.apply_url for domain in domains_to_ignore)]`, then `bulk_upsert` into `job_list` with `ON CONFLICT (company, location, title, apply_url) DO UPDATE` — see [[Database-Layer]] for the COALESCE trick
+4. Optional JSON backup via `Config.save_to_json([Job.to_dict(job) for job in unique_jobs if not any(domain in job.apply_url for domain in domains_to_ignore)])` — domain skip-list is `{"ziprecruiter", "bebee", "lensa"}`
+5. `fin_jobs = [Job.to_dict_for_db(job) for job in self.jobs if job.title != "unknown" and job.apply_url and not any(domain in job.apply_url for domain in domains_to_ignore)]`, then `bulk_upsert` into `job_list` with `ON CONFLICT (company, location, title, apply_url) DO UPDATE` — see [[Database-Layer]] for the COALESCE trick. **The call is currently `bulk_upsert("job_list", fin_jobs[:10], ...)`** — hard-capped to the first 10 rows of `fin_jobs`, marked `#TODO: Remove the 10 limit` in source. Everything past the first 10 valid jobs in a cycle is silently dropped, not deferred to next run — see [[Roadmap]].
 
 **Test mode (`test=True`, used for iterating on enrichment logic without re-scraping):**
 

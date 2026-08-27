@@ -2,11 +2,9 @@
 %% classDiagram — constants.py: all config and enum classes
 classDiagram
     class Config {
-        +DEFAULT_URL: str
         +FUZZY_THRESHOLD: int
         +REQUEST_TIMEOUT: int
         +JSEARCH_API_URL: str
-        +REMOTEOK: str
         +J_SEARCH_API_KEY: str
         +GROQ_API_KEY: str
         +GEMINI_KEY: str
@@ -49,7 +47,7 @@ classDiagram
         <<enum>>
         SIMPLIFY
         JSEARCH
-        REMOTEOK
+        SPEEDY
     }
 
     class DatePosted {
@@ -77,6 +75,16 @@ classDiagram
         +MIN_TABLE_COLUMNS: int
         +EXCLUDED_LINK_PREFIXES: list
         +EXCLUDED_LINK_DOMAINS: list
+        +DEFAULT_URL: str
+    }
+
+    class SpeedyConfig {
+        <<constants>>
+        +DEFAULT_URL: str
+        +MIN_TABLE_COLUMNS: int
+        +MAX_JOB_AGE_DAYS: int
+        +EXCLUDED_LINK_PREFIXES: list
+        +EXCLUDED_LINK_DOMAINS: list
     }
 
     class SearchQueries {
@@ -93,9 +101,7 @@ classDiagram
         +SCRAPED_JOBS_JSON: str
         +JSEARCH_RAW_JOBS: str
         +JSEARCH_JOBS: str
-        +REMOTEOK_RAW: str
-        +REMOTEOK_INTERNSHIPS: str
-        +SPONSOR_CACHE: str
+        +LAST_RUN: str
     }
 
     class Defaults {
@@ -120,7 +126,6 @@ classDiagram
         <<constants>>
         +SIMPLIFY: str
         +JSEARCH: str
-        +REMOTEOK: str
         +TOTAL_FETCHED: str
         +UNIQUE_JOBS: str
         +INSERTED: str
@@ -153,8 +158,11 @@ classDiagram
 
     Config --> FilePaths : save_to_json default path
     Config --> LLMConstants : logging config shared by same module
+    SpeedyConfig --> SimplifyConfig : reuses EXCLUDED_LINK_PREFIXES/DOMAINS
 
-    note for Config "Logging now writes to logs/run.log via a\ndedicated file_handler (DEBUG level), in\naddition to the existing basicConfig setup.\n\nis_missing() now also treats the literal\nstrings '{}', '[]', 'null', and 'None' as\nmissing, on top of the prior '', 'Unknown',\n'other', 'unknown' — guards against LLM/DB\nround-trips that stringify empty containers."
+    note for Config "Logging now writes to logs/run.log via a\ndedicated file_handler (DEBUG level), in\naddition to the existing basicConfig setup.\n\nis_missing() now also treats the literal\nstrings '{}', '[]', 'null', and 'None' as\nmissing, on top of the prior '', 'Unknown',\n'other', 'unknown' — guards against LLM/DB\nround-trips that stringify empty containers.\n\nThe Simplify README URL now lives on\nSimplifyConfig.DEFAULT_URL instead of Config\n(also bumped Summer2026 -> Summer2027)."
 
-    note for LLMConstants "Prompt schema changed: the old flat\n'description' field is now 'summary'\n(2-4 sentence, own-words) plus a new\n'description_looks_valid' bool. job_expired\nis now specified to never return null (only\ntrue/false). _MAX_TAGS was removed —\ntags are no longer capped at 11 entries.\n_TEXT_FIELD_LIMITS now limits 'summary'\n(500 chars) instead of 'description'."
+    note for LLMConstants "Prompt schema changed: the old flat\n'description' field is now 'summary'\n(2-4 sentence, own-words) plus a new\n'description_looks_valid' bool. job_expired\nis now specified to never return null (only\ntrue/false). _MAX_TAGS was removed —\ntags are no longer capped at 11 entries.\n_TEXT_FIELD_LIMITS now limits 'summary'\n(500 chars) instead of 'description'.\n\ntags gained a 'sponsorship': true|false|null\nkey (issue #18) — see [[Roadmap]] for why the\n/sponsor route matches the literal string\n'True', not 'true'."
+
+    note for FilePaths "LAST_RUN (resources/last_run.json) is new —\nSimplify and Speedy each stamp their own key\nin it after a successful fetch, used to compute\nhow far back to look on the next run."
 ```

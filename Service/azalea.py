@@ -9,6 +9,7 @@ from tqdm import tqdm
 from Utils.models import Job, JobStats
 from Service.db import JobDatabase
 from JobSource.jsearch import JSearch
+from JobSource.speedy import Speedy
 from Refine.refine import enrich_unenriched_jobs
 from JobSource.simplify import Simplify
 from Utils.notify import notify_discord
@@ -36,8 +37,13 @@ class Azalea:
         """Initialize all helper classes for job sources"""
         # Simplify is always available
         self.helpers[JobSource.SIMPLIFY] = Simplify()
+        self.helpers[JobSource.SPEEDY] = Speedy()
+
         Config.logger.info(
             f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized"
+        )
+        Config.logger.info(
+            f"✓ {JobSource.SPEEDY.value.capitalize()} helper initialized"
         )
 
         # JSearch requires API key
@@ -185,14 +191,23 @@ class Azalea:
 
                 # ── Step 2: Deduplicate ──────────────────────────────────────
                 self._log_section("DEDUPLICATING JOBS")
-                valid_jobs = [job for job in all_jobs if job is not None]
-                unique_jobs = list(set(valid_jobs))
-                unique_jobs = [job for job in unique_jobs if job.is_valid()]
-                self.stats.unique_jobs = len(unique_jobs)
-                self.jobs = unique_jobs
-                Config.logger.info(
-                    LogMessages.deduplication_result(len(all_jobs), len(unique_jobs))
-                )
+
+                if all_jobs:
+                    valid_jobs = [job for job in all_jobs if job is not None and job.is_valid()]
+
+                    # Dedupe using Job's own __eq__/__hash__, preserving scrape order
+                    seen = set()
+                    unique_jobs = []
+                    for job in valid_jobs:
+                        if job not in seen:
+                            seen.add(job)
+                            unique_jobs.append(job)
+
+                    self.stats.unique_jobs = len(unique_jobs)
+                    self.jobs = unique_jobs
+                    Config.logger.info(
+                        LogMessages.deduplication_result(len(all_jobs), len(unique_jobs))
+                    )
 
                 # ── Step 3: Save JSON (optional) ─────────────────────────────
                 if save_json:
@@ -239,7 +254,9 @@ class Azalea:
             if not fin_jobs:
                 Config.logger.warning("No valid jobs to insert into the database")
                 return self.stats.to_dict()
-            inserted = await db.bulk_upsert("job_list", fin_jobs[:10] , conflict_column=["company", "location", "title", "apply_url"])
+            
+            fin_jobs = fin_jobs[:10] if test else fin_jobs  # Limit to first 10 jobs for testing purposes
+            inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["company", "location", "title", "apply_url"])
             self.stats.inserted = len(inserted) #note this isn't a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
             Config.logger.info(
                 f"Inserted {self.stats.inserted} new jobs into the database"
@@ -272,7 +289,7 @@ def main():
     orchestrator = Azalea()
 
     try:
-        asyncio.run(orchestrator.run(position_type=PositionType.INTERN, save_json=True,test=True))
+        asyncio.run(orchestrator.run(position_type=PositionType.INTERN, save_json=True,test=False))
 
     except Exception as e:
         err_msg = f"❌ Libra scraper failed:\n```{str(e)}```"

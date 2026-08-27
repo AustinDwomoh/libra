@@ -22,5 +22,5 @@ flowchart TD
     E --> F{more jobs in raw_jobs?}
     F -->|yes| C
     F -->|no| G[filter out None results]
-    G --> H[return List[Job] to Caller]
+    G --> H["return List[Job] to Caller"]
 ```

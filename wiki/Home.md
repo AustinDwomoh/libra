@@ -2,7 +2,7 @@
 
 Internal reference for the Libra job-scraping/enrichment pipeline. This is not user-facing docs — it's here so future-me (or anyone else touching this) doesn't have to re-derive the architecture from scratch.
 
-**What Libra does:** pulls job postings from Simplify's GitHub README and the JSearch API, dedupes them, stores them in Postgres, runs an LLM enrichment pass (**Ollama**, running `deepseek-r1:8b` locally) to fill in missing fields (pay range, remote status, role type, description, summary, tags), periodically re-validates active listings for expiry, and serves everything read-only through a FastAPI. A standalone embedding pass also builds a pgvector-backed RAG example bank for future use.
+**What Libra does:** pulls job postings from the Simplify and Speedy GitHub READMEs plus the JSearch API, dedupes them, stores them in Postgres, runs an LLM enrichment pass (**Ollama**, running `deepseek-r1:8b` locally) to fill in missing fields (pay range, remote status, role type, description, summary, tags), periodically re-validates active listings for expiry, and serves everything read-only through a FastAPI. A standalone embedding pass also builds a pgvector-backed RAG example bank for future use.
 
 **Live API:** `http://libra.austindwomoh.xyz` · Swagger: `/docs`
 
@@ -15,6 +15,7 @@ Internal reference for the Libra job-scraping/enrichment pipeline. This is not u
 - [[Deployment-CI-CD]] — GitHub Actions workflows, cron schedule, SSH deploy
 - [[Diagrams]] — index of all Mermaid class/sequence diagrams in `docs/diagrams`
 - [[Roadmap]] — planned/unfinished work, known bugs
+- [`CONTRIBUTING.md`](../CONTRIBUTING.md) — new-contributor setup, workflow, and PR checklist walkthrough
 
 ## Repo map
 
@@ -27,10 +28,9 @@ Libra/
 │   └── Scrapper.py        # Pirate: Playwright/requests scraping, ScrapeResult, JobPosting JSON-LD, blocked/expired detection
 ├── JobSource/
 │   ├── simplify.py        # scrapes Simplify's GitHub README tables
+│   ├── speedy.py           # scrapes Speedy (speedyapply) GitHub README tables
 │   ├── jsearch.py         # JSearch (OpenWebNinja) API
 │   └── base.py            # shared helper base
-│   # NOTE: no remote.py — RemoteOK is a JobSource enum value with no
-│   #       implementation or registered helper. See Roadmap.
 ├── Refine/
 │   ├── extractor.py       # JobEnricher: regex stage + Pirate scrape stage + LLM stage
 │   ├── llm.py              # LLMProvider ABC, OllamaProvider, LLMParseError, JSON repair, check_expired()

@@ -39,7 +39,6 @@ classDiagram
         <<dataclass>>
         +simplify: int
         +jsearch: int
-        +remoteok: int
         +total_fetched: int
         +unique_jobs: int
         +inserted: int
@@ -62,7 +61,7 @@ classDiagram
         <<enum>>
         SIMPLIFY
         JSEARCH
-        REMOTEOK
+        SPEEDY
     }
 
     class StatsKeys {

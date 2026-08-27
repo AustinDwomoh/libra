@@ -26,7 +26,8 @@ class JobSource(Enum):
 
     SIMPLIFY = "simplify"
     JSEARCH = "jsearch"
-    REMOTEOK = "remoteok"
+    SPEEDY = "speedy"
+  
 
 # JSearch API constants
 class JSearchConfig:
@@ -83,10 +84,7 @@ class FilePaths:
     SCRAPED_JOBS_JSON: Final = "resources/scraped_jobs.json"
     JSEARCH_RAW_JOBS: Final = "resources/jsearch_raw_jobs.json"
     JSEARCH_JOBS: Final = "resources/jsearch_jobs.json"
-    REMOTEOK_RAW: Final = "resources/remoteok_raw.json"
-    REMOTEOK_BEFORE_JOBS: Final = "resources/remoteok_before_jobs.json"
-    REMOTEOK_INTERNSHIPS: Final = "resources/remoteok_internships.json"
-    SPONSOR_CACHE: Final = "cache/sponsors.json"
+    LAST_RUN: Final = "resources/last_run.json"
 
 
 # Logging messages
@@ -123,7 +121,6 @@ class StatsKeys:
 
     SIMPLIFY: Final = "simplify"
     JSEARCH: Final = "jsearch"
-    REMOTEOK: Final = "remoteok"
     TOTAL_FETCHED: Final = "total_fetched"
     UNIQUE_JOBS: Final = "unique_jobs"
     INSERTED: Final = "inserted"
@@ -152,6 +149,15 @@ class SimplifyConfig:
     MIN_TABLE_COLUMNS: Final = 3
     EXCLUDED_LINK_PREFIXES: Final = ["#"]
     EXCLUDED_LINK_DOMAINS: Final = ["github.com"]
+    DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2027-Internships/dev/README.md"
+
+class SpeedyConfig:
+    DEFAULT_URL = "https://raw.githubusercontent.com/speedyapply/2027-SWE-College-Jobs/main/README.md"
+    MIN_TABLE_COLUMNS = 6  # Company | Position | Location | Salary | Posting | Age
+    MAX_JOB_AGE_DAYS = 30
+    EXCLUDED_LINK_PREFIXES = SimplifyConfig.EXCLUDED_LINK_PREFIXES  # reuse, or define your own
+    EXCLUDED_LINK_DOMAINS = SimplifyConfig.EXCLUDED_LINK_DOMAINS
+
 
 class DatePosted(Enum):
     """Date filter options for job searches"""
@@ -163,14 +169,13 @@ class DatePosted(Enum):
 
 
 class Config:
-    DEFAULT_URL = "https://raw.githubusercontent.com/SimplifyJobs/Summer2026-Internships/dev/README.md"
+   
     FUZZY_THRESHOLD = 90
     REQUEST_TIMEOUT = 30
     #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     #GOOGLE_CX = os.getenv("GOOGLE_CX")
     LOG_FILE = os.makedirs("logs", exist_ok=True) or "logs/run.log"
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
-    REMOTEOK= "https://remoteok.com/api"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
     file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)

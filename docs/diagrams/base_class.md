@@ -30,6 +30,6 @@ classDiagram
     JobSourceBase --> Job : creates via _make_job
     JobSourceBase --> Config : uses REQUEST_TIMEOUT
     JobSourceBase <|-- Simplify : extends
+    JobSourceBase <|-- Speedy : extends
     JobSourceBase <|-- JSearch : extends
-    JobSourceBase <|-- RemoteOKHelper : extends
 ```
