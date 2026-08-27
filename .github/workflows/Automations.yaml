@@ -37,6 +37,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: "60m" 
           script: |
             set -euo pipefail
 
@@ -76,9 +77,11 @@ jobs:
        - name: Run enrichment via SSH
          uses: appleboy/ssh-action@v0.1.7
          with:
+
            host: ${{ secrets.SSH_HOST }}
            username: ${{ secrets.SSH_USER }}
            key: ${{ secrets.SSH_PRIVATE_KEY }}
+           command_timeout: "60m" 
            script: |
              set -euo pipefail
 
@@ -120,6 +123,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: "60m"
           envs: DISCORD_WEBHOOK,REPO,REF
           script: |
             set -uo pipefail   # no -e: a failing python run must not skip the notify step below
