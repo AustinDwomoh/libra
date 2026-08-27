@@ -22,4 +22,4 @@
 
 ### Before merging
 - [ ] Ran the actual code path this PR touches, not just read it — an import succeeding isn't the same as the logic being correct (e.g. the `azalea.py` test-mode bug didn't crash, it just silently inserted the wrong data shape)
-- [ ] If you added a Mermaid diagram or edited one, validated the syntax actually parses (GitHub's renderer will silently show a parse error otherwise) — Mermaid sequence diagrams don't support `try`/`catch`; use `alt`/`else` instead
+- [ ] If you added a Mermaid diagram or edited one, validated the syntax actually parses (GitHub's renderer will silently show a parse error otherwise) — process diagrams should be `flowchart TD`, not `sequenceDiagram`, per the repo-wide convention

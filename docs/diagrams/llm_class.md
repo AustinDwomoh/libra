@@ -1,5 +1,5 @@
 ```mermaid
-%% classDiagram — LLMProvider hierarchy, currently Ollama-only (Groq commented out)
+%% classDiagram — LLMProvider hierarchy, currently Ollama-only
 classDiagram
     class LLMProvider {
         <<abstract>>
@@ -15,13 +15,6 @@ classDiagram
         -_get_client()
     }
 
-    class GroqProvider {
-        <<commented out>>
-        +model: str = "qwen/qwen3.6-27b"
-        +complete(prompt) str
-        note: "Disabled — project moved to\nfree/local Ollama. Code retained\nfor an easy swap-back if needed."
-    }
-
     class LLMParseError {
         <<Exception>>
         note: "Raised when JSON can't be parsed\neven after repair attempts.\nDistinct from transient network/\nrate-limit errors from complete()."
@@ -34,7 +27,6 @@ classDiagram
     }
 
     LLMProvider <|-- OllamaProvider
-    LLMProvider <|-- GroqProvider
     LLMProvider ..> LLMParseError : raises
     LLMProvider --> JobDataSanitizer : sanitizes parsed output
     LLMProvider --> LLMParseError : uses _try_repair_json() before raising

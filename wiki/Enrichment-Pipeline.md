@@ -2,9 +2,9 @@
 
 Four files: `Service/Scrapper.py` (`Pirate`), `Refine/extractor.py` (`JobEnricher`, `RegexConstants`), `Refine/llm.py` (`LLMProvider`, `OllamaProvider`, `LLMParseError`), `Utils/sanitate.py` (`JobDataSanitizer`). Goal is unchanged: fill `pay_range`, `is_remote`, `role_type`, `location`, `tags`, `description` (and now `summary`) without ever overwriting a field that's already populated — except structured markup from the employer's own page, which is treated as authoritative and does overwrite.
 
-## Provider: Ollama, not Groq
+## Provider: Ollama
 
-`llm.py` ships with **`OllamaProvider`** as the only active provider — `deepseek-r1:8b`, run fully locally via `pip install ollama` + `ollama pull deepseek-r1:8b`. The old `GroqProvider` class is still in the file but fully commented out. If you ever need to swap back or add a new provider, subclass `LLMProvider` and implement `complete(prompt) -> str`. `LLMProvider` also exposes `check_expired(text)` — a narrow, dedicated call used only by the [[Roadmap|weekly expiry checker]], never by the main enrichment path.
+`llm.py` ships with **`OllamaProvider`** as the only provider in the file — `deepseek-r1:8b`, run fully locally via `pip install ollama` + `ollama pull deepseek-r1:8b`. If you ever need to add a new provider, subclass `LLMProvider` and implement `complete(prompt) -> str`. `LLMProvider` also exposes `check_expired(text)` — a narrow, dedicated call used only by the [[Roadmap|weekly expiry checker]], never by the main enrichment path.
 
 ## Entry point: `refine.py` → `enrich_unenriched_jobs()`
 
@@ -70,7 +70,7 @@ The output schema changed. The prompt (`Utils/constants.py::LLMConstants._LLM_PR
 - **`description_looks_valid`** (bool) — true if the scraped text read as an actual job description, false if it looked like navigation, an error/login page, or garbled text. A `false` here doesn't block the description fill; it just appends a warning to `self.meta["warnings"]`.
 - **`job_expired`** — now specified in the prompt to never return `null`, only `true`/`false`.
 - Pay-range guidance in the prompt was rewritten with concrete before/after examples (`"$45/hr"` → `[45, null]`, explicitly **not** annualized into both slots) instead of prose rules.
-- **`tags`** — unchanged shape (`requirements`, `preferred`, `skills`, `technologies`, `certifications`, `experience_years`), but the old `_MAX_TAGS = 11` cap and the per-value 100-char truncation in `JobDataSanitizer._normalise_tags()` have both been removed — tags are no longer artificially capped or truncated.
+- **`tags`** — grew a new `sponsorship: true | false | null` key (issue #18) alongside the existing `requirements`, `preferred`, `skills`, `technologies`, `certifications`, `experience_years`. `JobDataSanitizer._normalise_tags()` stringifies non-string values via `str(v)`, so a `sponsorship` bool lands in the DB as the literal string `"True"`/`"False"` — see [[API-Reference]]'s `/sponsor` route, which now filters on exactly that. The old `_MAX_TAGS = 11` cap and the per-value 100-char truncation in `_normalise_tags()` have both been removed — tags are no longer artificially capped or truncated.
 
 **JSON repair pipeline** (`_try_repair_json` in `llm.py`) is unchanged: optional `json_repair` library → smart-quote normalization → trailing-comma stripping → single-to-double-quote conversion → regex pull of the first `{...}` block → `LLMParseError` if nothing works.
 

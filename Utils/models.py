@@ -11,7 +11,6 @@ class JobStats:
 
     simplify: int = 0
     jsearch: int = 0
-    remoteok: int = 0
     total_fetched: int = 0
     unique_jobs: int = 0
     inserted: int = 0
@@ -23,7 +22,6 @@ class JobStats:
         return {
             StatsKeys.SIMPLIFY: self.simplify,
             StatsKeys.JSEARCH: self.jsearch,
-            StatsKeys.REMOTEOK: self.remoteok,
             StatsKeys.TOTAL_FETCHED: self.total_fetched,
             StatsKeys.UNIQUE_JOBS: self.unique_jobs,
             StatsKeys.INSERTED: self.inserted,
@@ -35,7 +33,7 @@ class JobStats:
         """Reset per-source counters"""
         self.simplify = 0
         self.jsearch = 0
-        self.remoteok = 0
+
 
     def increment_source(self, source: JobSource, count: int):
         """Increment counter for a specific source"""
@@ -43,9 +41,7 @@ class JobStats:
             self.simplify += count
         elif source == JobSource.JSEARCH:
             self.jsearch += count
-        elif source == JobSource.REMOTEOK:
-            self.remoteok += count
-
+      
 
 @dataclass
 class Company:

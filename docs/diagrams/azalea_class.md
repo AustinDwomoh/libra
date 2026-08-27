@@ -17,7 +17,6 @@ classDiagram
     class JobStats {
         +simplify: int
         +jsearch: int
-        +remoteok: int
         +total_fetched: int
         +unique_jobs: int
         +inserted: int
@@ -32,13 +31,12 @@ classDiagram
         +fetch_jobs() List[Job]
     }
 
-    class JSearch {
-        +fetch_jobs(queries, position_type, date_posted) List[Job]
+    class Speedy {
+        +fetch_jobs() List[Job]
     }
 
-    class RemoteOKHelper {
-        <<NOT IMPLEMENTED>>
-        +fetch_jobs(position_type) List[Job]
+    class JSearch {
+        +fetch_jobs(queries, position_type, date_posted) List[Job]
     }
 
     class JobDatabase {
@@ -61,17 +59,17 @@ classDiagram
         <<enum>>
         SIMPLIFY
         JSEARCH
-        REMOTEOK
+        SPEEDY
     }
 
     Azalea --> JobStats : tracks via stats
-    Azalea --> Simplify : helpers[SIMPLIFY]
+    Azalea --> Simplify : helpers[SIMPLIFY] (always)
+    Azalea --> Speedy : helpers[SPEEDY] (always)
     Azalea --> JSearch : helpers[JSEARCH]?
-    Azalea ..> RemoteOKHelper : never instantiated — JobSource.REMOTEOK\nis a live enum value, but _init_helpers()\nhas no branch for it and there is no\nJobSource/remote.py file in this repo
-    Azalea --> JobDatabase : bulk_upsert(fin_jobs), get_or_create_company (test mode)
+    Azalea --> JobDatabase : bulk_upsert(fin_jobs, capped to 10), get_or_create_company (test mode)
     Azalea --> enrich_unenriched_jobs : test mode only
     Azalea --> notify_discord : on error in main()
     Azalea --> JobSource : keys helpers dict
 
-    note for Azalea "self.jobs is the single source of truth for\nBOTH modes — production sets it at Step 2\n(dedup), test mode builds it via Job.from_dict()\nin the JSON-load loop. Step 4 always converts\nself.jobs -> fin_jobs via to_dict_for_db() right\nbefore the DB call, so both modes get identical\nUUID/tags normalization.\n\nTest mode now caps at the first 10 jobs from the\nJSON backup (was previously unbounded/20), skips\ndomains_to_ignore = {ziprecruiter, bebee, lensa}\n(grew from just {ziprecruiter}), and falls back to\ndb.get_or_create_company() when a job's JSON\n'company' field isn't a valid UUID string.\nTest mode's enrichment call also now runs with\nbatch_size=5, not 20."
+    note for Azalea "self.jobs is the single source of truth for\nBOTH modes — production sets it at Step 2\n(dedup), test mode builds it via Job.from_dict()\nin the JSON-load loop. Step 4 always converts\nself.jobs -> fin_jobs via to_dict_for_db() right\nbefore the DB call, so both modes get identical\nUUID/tags normalization.\n\nDedup (Step 2) is no longer list(set(...)) — it\nfilters is_valid() first, then walks valid_jobs in\nscrape order building a seen-set by hand, so output\norder now matches input order (same __hash__/__eq__\nfields as before: title+company+location+apply_url\n+summary).Test mode still caps at the first 10 jobs from the\nJSON backup and falls back to\ndb.get_or_create_company() when a job's JSON\n'company' field isn't a valid UUID string."
 ```

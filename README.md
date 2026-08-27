@@ -26,10 +26,10 @@ Libra aggregates internship and full-time job listings from multiple sources, en
 ## How it works
 
 ```
-Simplify README + JSearch API + RemoteOK API
+Simplify README + Speedy README + JSearch API
                 │
                 ▼  List[Job]
-       Dedup (set() via Job.__hash__/__eq__)
+   Dedup (filter is_valid(), then a manual seen-set loop via Job.__hash__/__eq__)
                 │
                 ▼  valid, unique jobs
    bulk_upsert → job_list (ON CONFLICT + COALESCE)
@@ -48,7 +48,7 @@ Scraping runs on a cron schedule (5x/day); enrichment runs once/day plus on manu
 Three stages, each only filling fields still missing (never overwrites existing data):
 
 1. **Regex** (`Refine/extractor.py::RegexConstants`) — pay range, remote status, role type, years-of-experience, all from the description text. Includes anchor-keyword checks so bare number ranges (e.g. "3-5 years") aren't misread as salary.
-2. **LLM** (`Refine/llm.py`) — currently **Ollama** running `deepseek-r1:8b` locally (Groq is present in the code but commented out — the project moved to a free/local model). Output is JSON-repaired if malformed (`_try_repair_json`, with an optional `json_repair` library assist) and run through `JobDataSanitizer` (`Utils/sanitate.py`) to coerce types, clamp text lengths, and normalize `role_type`/`is_remote` before touching the DB.
+2. **LLM** (`Refine/llm.py`) — currently **Ollama** running `deepseek-r1:8b` locally. Output is JSON-repaired if malformed (`_try_repair_json`, with an optional `json_repair` library assist) and run through `JobDataSanitizer` (`Utils/sanitate.py`) to coerce types, clamp text lengths, and normalize `role_type`/`is_remote` before touching the DB.
 3. **Scrape fallback** (`Service/Scrapper.py::Pirate`) — Playwright-first (falls back to `requests`), checks for a schema.org `JobPosting` JSON-LD block first (treated as authoritative, vendor-supplied ground truth), detects expired/dead listings via known URL patterns and text signals, then re-runs regex/LLM on whatever text it recovered.
 
 Jobs whose LLM output can't be parsed even after repair get `enrich_attempts` incremented and are retried up to `MAX_ENRICH_ATTEMPTS` (3) before being marked enriched anyway, so a persistently bad response doesn't loop forever.
@@ -71,8 +71,9 @@ Libra/
 │
 ├── JobSource/
 │   ├── simplify.py            # Scrapes Simplify's GitHub internship README
+│   ├── speedy.py              # Scrapes Speedy (speedyapply) GitHub README
 │   ├── jsearch.py             # JSearch API (OpenWebNinja)
-│   └── remote.py              # RemoteOK API
+│   └── base.py                # Shared helper base
 │
 ├── Refine/
 │   ├── refine.py               # enrich_unenriched_jobs() — DB-driven enrichment loop
@@ -87,9 +88,11 @@ Libra/
 │
 ├── Tasks/
 │   ├── scrape.py               # CLI entry point: runs Azalea.run()
-│   └── enrich.py               # Standalone enrichment task + Discord job embeds
+│   ├── enrich.py               # Standalone enrichment task + Discord job embeds
+│   ├── expired.py              # ExpiryChecker: weekly tiered re-validation of active jobs
+│   └── embeddings.py           # Standalone embedding + RAG example-bank promotion pass
 │
-├── docs/diagrams/               # Mermaid class + sequence diagrams (currently stale — see below)
+├── docs/diagrams/               # Mermaid class + flowchart diagrams, one pair per module
 └── wiki/                        # Wiki source, auto-synced to the GitHub Wiki on push to master
 ```
 
@@ -102,7 +105,7 @@ Libra/
 | Web framework | FastAPI 0.117 | REST API, routing, middleware |
 | ASGI server | uvicorn 0.37 | Serve the FastAPI app |
 | Database | asyncpg 0.31 | Async PostgreSQL driver with connection pooling |
-| Scraping | BeautifulSoup4, requests | Parse Simplify GitHub README, static fallback scraping |
+| Scraping | BeautifulSoup4, requests | Parse Simplify/Speedy GitHub READMEs, static fallback scraping |
 | Browser automation | Playwright 1.58 | Extract job descriptions from apply pages (Workday, Greenhouse, etc.) |
 | LLM enrichment | Ollama (`deepseek-r1:8b`) | Structured JSON extraction from descriptions, runs locally |
 | Data processing | pandas 3.0, RapidFuzz 3.14 | Data manipulation, fuzzy deduplication |
@@ -146,7 +149,7 @@ JSearch_API_Key=your_jsearch_api_key
 # Notifications
 DISCORD_WEBHOOK_URL=your_discord_webhook_url
 
-# Legacy / optional — Groq support is present in code but currently unused
+# Optional, currently unused
 GROQ_API_KEY=
 GEMINI_KEY=
 ```
@@ -213,13 +216,14 @@ Base URL: `http://libra.austindwomoh.xyz`. Full details in [`wiki/API-Reference.
 
 ## Deployment
 
-Three GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy on push to `master`), `scrape.yaml` (scrape 5x/day, enrich 1x/day, both via SSH to the DigitalOcean droplet), and `notify.yaml` (Discord notifications on any push/issue activity). A fourth, `wiki-sync.yaml`, mirrors this repo's `wiki/` folder into the GitHub Wiki on push. See [`wiki/Deployment-CI-CD.md`](./wiki/Deployment-CI-CD.md) for the full breakdown.
+Five GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy on push to `master`), `Automations.yaml` (scrape 5x/day, enrich 1x/day, weekly expiry re-validation, all via SSH to the DigitalOcean droplet), `notify.yaml` (Discord notifications on any push/issue activity), `PR checklist.yaml` (enforces the PR template checklist), and `wiki-sync.yaml` (mirrors this repo's `wiki/` folder into the GitHub Wiki on push). See [`wiki/Deployment-CI-CD.md`](./wiki/Deployment-CI-CD.md) for the full breakdown.
 
 ---
 
 ## Known gaps (see [`wiki/Roadmap.md`](./wiki/Roadmap.md) for the full list)
 
 - `enrich_attempts` column isn't in a tracked SQL migration — add manually if missing from your DB.
+- `JobSource/speedy.py` imports the `markdown` package, which isn't in `requirements.txt` yet — `pip install markdown` if you hit an `ImportError` there.
 - No automated test suite yet.
 - `master` requires PRs — see `.github/PULL_REQUEST_TEMPLATE.md` for the checklist enforced on every PR via the `PR Checklist` GitHub Action.
 
