@@ -1,11 +1,20 @@
 import re, json, uuid, asyncio
 from typing import Optional
+
+import httpx
+
 from Refine.llm import  LLMProvider, OllamaProvider
 from Utils.constants import Config
 from Utils.models import Job
 from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
 from tqdm import tqdm
+
+# Wall-clock ceiling for a single provider.extract() call, enforced on the
+# event loop. Sits slightly above OllamaProvider's own client timeout (120s)
+# so the HTTP client normally raises first and frees the worker thread —
+# asyncio.wait_for can't actually cancel the thread run by asyncio.to_thread.
+LLM_EXTRACT_TIMEOUT = 130.0
 
 # ─── Stage 1: Regex ────────────────────────────────────────────────────────────
 class RegexConstants:
@@ -270,6 +279,32 @@ class JobEnricher:
 
         return filled
     
+    async def _llm_extract(self, job: "Job", text: str | None) -> Optional[dict]:
+        """
+        Run the (blocking, sync) provider.extract() off the event loop with a
+        hard wall-clock cap. An LLM fed messy scraped text can stall or loop
+        for a very long time; without this a single job freezes the whole
+        enrichment process (see the AbbVie 67-minute hang).
+
+        Returns the extracted dict, or None if the call timed out — callers
+        should treat None as "skip the LLM step for this job" and move on.
+        """
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(self.provider.extract, job, text),
+                timeout=LLM_EXTRACT_TIMEOUT,
+            )
+        except (asyncio.TimeoutError, httpx.TimeoutException) as e:
+            self.meta["stages_run"].append("llm_timeout")
+            self.meta.setdefault("warnings", []).append(
+                f"job {self.job_id}: LLM extract() timed out after "
+                f"{LLM_EXTRACT_TIMEOUT:.0f}s ({type(e).__name__})"
+            )
+            Config.logger.warning(
+                f"job {self.job_id}: LLM extract() timed out, skipping LLM stage"
+            )
+            return None
+
     async def _handle_scraped_text(self, job: "Job", scraped: str|None|dict|ScrapeResult) -> Optional[dict]:
         if scraped is None or (isinstance(scraped, dict)):
             return
@@ -314,7 +349,12 @@ class JobEnricher:
         # use the snapshot, not a fresh _missing_fields(job) call
         if "description" in was_missing_before_fill and self.use_llm and self.provider:
             self.meta["stages_run"].append("llm_scraped")
-            extracted = self.provider.extract(job, scraped.trimmed_text) #type: ignore
+            extracted = await self._llm_extract(job, scraped.trimmed_text)  # type: ignore
+            if extracted is None:
+                # timed out — description is already filled from the scrape,
+                # so just stop here and let the caller persist what we have
+                Config.logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
+                return self.meta
 
             job_expired = extracted.pop("job_expired", None)
             if job_expired:
@@ -399,8 +439,12 @@ class JobEnricher:
             if (self._missing_fields(job) and self.use_llm and self.provider ):
                 Config.logger.info(f"LLM on structured description for: {missing}")
                 self.meta["stages_run"].append("llm_structured_desc")
-                extracted = self.provider.extract(job, scraped.get("description"))#type: ignore
                 #since if its sturtured u can just uses the get dict
+                extracted = await self._llm_extract(job, scraped.get("description"))  # type: ignore
+                if extracted is None:
+                    # timed out — persist the structured-data fields we already have
+                    Config.logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
+                    return self.meta
 
                 job_expired = extracted.pop("job_expired", None)
                 if job_expired:

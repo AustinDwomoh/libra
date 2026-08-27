@@ -9,7 +9,7 @@ classDiagram
     }
 
     class OllamaProvider {
-        +model: str = "deepseek-r1:8b"
+        +model: str = "qwen2.5:3b-instruct"
         -_client
         +complete(prompt) str
         -_get_client()

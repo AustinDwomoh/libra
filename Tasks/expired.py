@@ -228,8 +228,15 @@ class ExpiryChecker:
             return None
 
         # Dedicated, narrow LLM call — just the expired signal, no Job
-        # object needed and no other fields extracted or written.
-        is_expired = self.provider.check_expired(text_for_llm)
+        # object needed and no other fields extracted or written. check_expired
+        # is blocking (and can stall on a looping model); run it off the event
+        # loop so one job can't freeze the whole expiry sweep. The provider's
+        # own client timeout is the hard stop; this just keeps the loop free.
+        try:
+            is_expired = await asyncio.to_thread(self.provider.check_expired, text_for_llm)
+        except Exception as e:
+            Config.logger.warning(f"check_expired failed for deep check: {e}")
+            return None
         if is_expired is None:
             return None  # model gave no clear verdict — stay inconclusive
         self.metrics["resolved_tier3"] += 1

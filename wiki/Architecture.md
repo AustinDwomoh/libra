@@ -11,10 +11,10 @@ flowchart TD
     E --> G[Optional: save_to_json backup, skips ziprecruiter/bebee/lensa domains]
     E --> H["JobDatabase.bulk_upsert(job_list[:10])<br/>hard-capped to the first 10 rows — see Roadmap"]
     H --> I["ON CONFLICT DO UPDATE + COALESCE"]
-    I --> J["enrich_unenriched_jobs (Tasks/enrich.py, once/day)"]
+    I --> J["enrich_unenriched_jobs (Tasks/enrich.py, after every scrape)"]
     J --> K["JobEnricher: regex stage"]
     K --> L["Pirate.scrape_apply_url: ScrapeResult(raw_text, trimmed_text) or structured/blocked dict"]
-    L --> M["OllamaProvider LLM stage (deepseek-r1:8b) → summary + description_looks_valid + job_expired"]
+    L --> M["OllamaProvider LLM stage (qwen2.5:3b-instruct) → summary + description_looks_valid + job_expired"]
     M --> N["mark enriched = true"]
     N --> O["run_embedding_pass (Tasks/embeddings.py, standalone, not yet scheduled)"]
     N --> P["FastAPI read-only routes (main.py)"]
@@ -47,7 +47,7 @@ Note: `Speedy` is a new source, always-registered in `_init_helpers()` same as `
 
 ## Why enrichment is decoupled from scraping
 
-Scraping runs 5x/day (`Automations.yaml`); enrichment only runs on the `0 5 * * *` slot (or manual dispatch); the weekly `ExpiryChecker` pass and the standalone embedding pass run on their own schedules (see [[Deployment-CI-CD]]). This keeps local Ollama enrichment time bounded and means a scrape failure doesn't block enrichment of already-inserted rows, and vice versa.
+Scraping runs 3×/week (`Automations.yaml`: Mon/Wed/Fri); enrichment runs immediately after every scrape (`needs: scrape`); the `ExpiryChecker` pass runs weekly (Sat), and the standalone embedding pass isn't scheduled yet (see [[Workflows]]). Enrichment is still a *separate job* from scraping — decoupled so a scrape failure doesn't block enrichment of already-inserted rows and vice versa, and so local Ollama enrichment time stays bounded — it's just no longer throttled to a subset of scrape runs now that scrape itself only fires 3×/week.
 
 ## The enrichment stack, at a glance
 
@@ -66,4 +66,4 @@ Tasks/expired.py       — ExpiryChecker.run(): three-tier (HTTP → Playwright 
                           of active jobs, reusing Pirate.scrape_apply_url() and check_expired()
 ```
 
-See [[Enrichment-Pipeline]] for the full per-stage breakdown, [[Database-Layer]] for schema/`JobDatabase` details, and [[Deployment-CI-CD]] for the actual schedule/workflow wiring.
+See [[Enrichment-Pipeline]] for the full per-stage breakdown, [[Database-Layer]] for schema/`JobDatabase` details, and [[Workflows]] for the actual schedule/workflow wiring.

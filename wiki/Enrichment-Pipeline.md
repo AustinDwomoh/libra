@@ -4,7 +4,7 @@ Four files: `Service/Scrapper.py` (`Pirate`), `Refine/extractor.py` (`JobEnriche
 
 ## Provider: Ollama
 
-`llm.py` ships with **`OllamaProvider`** as the only provider in the file — `deepseek-r1:8b`, run fully locally via `pip install ollama` + `ollama pull deepseek-r1:8b`. If you ever need to add a new provider, subclass `LLMProvider` and implement `complete(prompt) -> str`. `LLMProvider` also exposes `check_expired(text)` — a narrow, dedicated call used only by the [[Roadmap|weekly expiry checker]], never by the main enrichment path.
+`llm.py` ships with **`OllamaProvider`** as the only provider in the file — `qwen2.5:3b-instruct`, run fully locally via `pip install ollama` + `ollama pull qwen2.5:3b-instruct`. If you ever need to add a new provider, subclass `LLMProvider` and implement `complete(prompt) -> str`. `LLMProvider` also exposes `check_expired(text)` — a narrow, dedicated call used only by the [[Roadmap|weekly expiry checker]], never by the main enrichment path.
 
 ## Entry point: `refine.py` → `enrich_unenriched_jobs()`
 
@@ -95,4 +95,4 @@ Not part of `enrich_unenriched_jobs()` anymore. `run_embedding_pass(batch_size=5
 3. Reuses that same embedding (no re-embedding) to evaluate promotion into `enrichment_examples` via `maybe_promote_to_example_bank()` — skipped if `enrich_attempts > 1`, if the job fails `passes_sanity_checks()` (valid `role_type`, sane `pay_range`, real `location`, `description` ≥ 50 chars), or if it's cosine-similarity ≥ 0.95 to an existing example
 4. Posts a Discord summary via `notify_discord(..., file_path="embedded_jobs.txt")` on completion
 
-This is not yet wired into any GitHub Actions workflow — see [[Deployment-CI-CD]] and [[Roadmap]]. It must currently be run manually.
+This is not yet wired into any GitHub Actions workflow — see [[Workflows]] and [[Roadmap]]. It must currently be run manually on the droplet.

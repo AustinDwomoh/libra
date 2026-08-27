@@ -3,17 +3,30 @@ name: Automation
 
 on:
   schedule:
-    - cron: '0 5 * * *'   # 12 AM EST
-    - cron: '0 10 * * *'  # 5 AM EST
-    - cron: '0 15 * * *'  # 10 AM EST
-    - cron: '0 20 * * *'  # 3 PM EST
-    - cron: '0 1 * * *'   # 8 PM EST
+    # Scrape + enrich, 3x/week. Job boards don't refresh meaningfully more
+    # often than every 2-3 days, so these are spread for even weekly coverage
+    # (no back-to-back days; ~54h / ~54h / ~60h apart) rather than frequency.
+    # Times are also staggered across the day to catch postings made at
+    # different hours. GitHub crons are UTC and may be delayed a few minutes.
+    - cron: '0 8 * * 1'    # Mon 08:00 UTC (~03:00 ET) - scrape + enrich
+    - cron: '0 14 * * 3'   # Wed 14:00 UTC (~09:00 ET) - scrape + enrich
+    - cron: '0 20 * * 5'   # Fri 20:00 UTC (~15:00 ET) - scrape + enrich
+    # Weekly expiry sweep, on a day with no scrape so the 4GB VPS isn't
+    # running Playwright + Ollama for two heavy jobs at once.
+    - cron: '0 6 * * 6'    # Sat 06:00 UTC (~01:00 ET) - weekly expiry checker
   workflow_dispatch:
 
 jobs:
   scrape:
     name: Scrape Jobs
     runs-on: ubuntu-latest
+    # scrape has no `needs`, so without this it would also fire on the Sat
+    # expiry cron. Restrict it to its own three crons (+ manual dispatch).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.schedule == '0 8 * * 1' ||
+      github.event.schedule == '0 14 * * 3' ||
+      github.event.schedule == '0 20 * * 5'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +66,9 @@ jobs:
      name: Enrich Jobs
      runs-on: ubuntu-latest
      needs: scrape
-     if: github.event.schedule == '0 5 * * *' || github.event_name == 'workflow_dispatch'
+     # No schedule filter: enrich runs every time scrape does. `needs: scrape`
+     # already gates it (skipped scrape -> skipped enrich, failed scrape ->
+     # skipped enrich).
      steps:
        - name: Checkout
          uses: actions/checkout@v4
@@ -89,6 +104,7 @@ jobs:
   expired:
     name: Expire Jobs
     runs-on: ubuntu-latest
+    # Matches the Sat 06:00 UTC cron in on.schedule exactly (+ manual dispatch).
     if: github.event.schedule == '0 6 * * 6' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout

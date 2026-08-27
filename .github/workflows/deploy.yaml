@@ -43,6 +43,29 @@ jobs:
             # Install/upgrade dependencies
             pip install -r requirements.txt --upgrade-strategy only-if-needed
 
+            # ── Self-sufficient setup (merged in from installer.ps1) ──────────
+            # Every deploy re-asserts the full environment so it never depends
+            # on a separately-run installer script.
+
+            # Ensure manual-install packages are present (in case requirements.txt
+            # doesn't pin them yet)
+            pip install --upgrade gunicorn uvicorn asyncpg pgvector ollama
+
+            # Ensure Playwright browsers/deps are present
+            playwright install
+            playwright install-deps
+
+            # Ensure Ollama binary is installed
+            if ! command -v ollama >/dev/null 2>&1; then
+              curl -fsSL https://ollama.com/install.sh | sh
+            fi
+
+            # Ensure required models are pulled (idempotent). Runs before the
+            # service restart so a failed pull is caught here, not after libra
+            # restarts into a broken state.
+            ollama list | grep -q "qwen2.5:3b-instruct" || ollama pull qwen2.5:3b-instruct
+            ollama list | grep -q "nomic-embed-text" || ollama pull nomic-embed-text
+
             # Restart API with systemd
             sudo systemctl restart libra
 

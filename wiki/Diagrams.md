@@ -53,7 +53,7 @@ Regenerated to catch up with everything merged since the last sync (`d6fa990` â†
 
 ## Higher-level diagrams (kept in the wiki, not per-module)
 
-[[Architecture]] has the full pipeline flowchart and the enrichment-stack tree; [[Enrichment-Pipeline]] has the `JobEnricher.enrich_job()` decision flow reflecting the current `ScrapeResult`/structured/blocked branching.
+[[Architecture]] has the full pipeline flowchart and the enrichment-stack tree; [[Enrichment-Pipeline]] has the `JobEnricher.enrich_job()` decision flow reflecting the current `ScrapeResult`/structured/blocked branching; [[Workflows]] has a triggerâ†’job flowchart for all five GitHub Actions workflows.
 
 ## Keeping these in sync
 

@@ -1,43 +1,75 @@
 # Deployment & CI/CD
 
-Five GitHub Actions workflows, most deploying via SSH to a DigitalOcean droplet at `/var/www/libra/`, running under a `libra` virtualenv and a `libra` systemd service.
+The environment side of deployment. For the full breakdown of every GitHub
+Actions workflow — triggers, jobs, cron rationale, secrets — see [[Workflows]].
 
-## `deploy.yaml` — API deploy
+## The box
 
-Trigger: push to `master`. Pulls latest code (`git reset --hard origin/master`), reinstalls requirements, `sudo systemctl restart libra`. Discord notification on success/failure via webhook + role mention.
-
-## `Automations.yaml` — scrape + enrich + expire cron
-
-This replaces the old single scrape/enrich workflow (previously named `scarpe.yaml`, since renamed and restructured into three jobs). Schedule:
+A DigitalOcean droplet (4 GB RAM, Linux). Everything lives at `/var/www/libra/`:
 
 ```
-0 5 * * *   → 12 AM EST
-0 10 * * *  → 5 AM EST
-0 15 * * *  → 10 AM EST
-0 20 * * *  → 3 PM EST
-0 1 * * *   → 8 PM EST
+/var/www/libra/
+├── libra/            # the virtualenv (source libra/bin/activate)
+├── logs/             # scrape.log, enrich.log, expired.log, run.log
+├── .env              # DB creds, API keys (not in git)
+└── <repo checkout>   # kept exactly at origin/master by every deploy
 ```
 
-(also `workflow_dispatch` for manual runs)
+- **venv:** `libra/` — activated with `source libra/bin/activate` in every SSH
+  script.
+- **service:** a `libra` systemd unit runs the FastAPI app (via uvicorn/gunicorn).
+  Restarted with `sudo systemctl restart libra`. The SSH user is **root**, so
+  `sudo` is a no-op and `playwright install-deps` / the Ollama install script
+  work without extra privilege setup.
+- **code:** every deploy does `git fetch origin && git reset --hard
+  origin/master` — the checkout is disposable and always matches `master`
+  exactly. Don't hand-edit files on the droplet; they'll be blown away on the
+  next push.
+- **Ollama:** runs locally on the droplet. Models: `qwen2.5:3b-instruct`
+  (enrichment + expiry LLM checks) and `nomic-embed-text` (embeddings). Both are
+  pulled/verified by the deploy script.
 
-- **`scrape` job**: runs on every scheduled trigger — SSHes in, `git reset --hard origin/master`, reinstalls requirements, runs `Tasks/scrape.py`, logs to `logs/scrape.log`. Notifies Discord on failure only.
-- **`enrich` job**: `needs: scrape`, but only actually runs when the trigger is the `0 5 * * *` cron slot or a manual `workflow_dispatch` — i.e. enrichment runs once a day, not on every scrape cycle. Runs `Tasks/enrich.py`, logs to `logs/enrich.log`. Notifies Discord on failure only.
-- **`expired` job**: gated on `github.event.schedule == '0 6 * * 6'` (Saturday 6 AM UTC) or manual dispatch — **note this cron expression isn't actually one of the five listed under `on.schedule` above**, so as written this job's `if` condition can only ever be satisfied by a manual `workflow_dispatch`, never by the schedule itself (see [[Roadmap]]). Runs `Tasks/expired.py`, logs to `logs/expired.log`, and notifies Discord on **both** success and failure (unlike the other two jobs), attaching the log file to the message.
+## Deploy = code pull + environment reassertion
 
-`Tasks/embeddings.py` (the new standalone embedding/RAG pass) has **no job in this workflow at all** — it isn't scheduled anywhere yet. It must be run manually on the droplet until a job is added.
+`deploy.yaml` fires on every push to `master` and, in one SSH step, both pulls
+the new code **and** re-asserts the whole runtime environment:
 
-## `PR checklist.yaml`
+```bash
+git reset --hard origin/master
+pip install -r requirements.txt --upgrade-strategy only-if-needed
 
-Runs a concurrency-controlled checklist check on pull requests (see the repo's `.github/PULL_REQUEST_TEMPLATE.md` for what the checklist itself covers). Not tied to deploy/scrape — purely a PR gate.
+# setup block — merged in from installer.ps1 so a deploy needs no follow-up
+pip install --upgrade gunicorn uvicorn asyncpg pgvector ollama
+playwright install && playwright install-deps
+command -v ollama >/dev/null 2>&1 || curl -fsSL https://ollama.com/install.sh | sh
+ollama list | grep -q "qwen2.5:3b-instruct" || ollama pull qwen2.5:3b-instruct
+ollama list | grep -q "nomic-embed-text"   || ollama pull nomic-embed-text
 
-## `wiki-sync.yaml`
+sudo systemctl restart libra
+```
 
-Syncs the `wiki/` folder in this repo to the GitHub Wiki on push, so the pages here (this one included) stay mirrored without a manual publish step. This is the workflow whose output you're reading if you're viewing this on the GitHub Wiki rather than in-repo.
+The setup block is idempotent (no-op when the box is already current) and runs
+**before** the service restart, so a failed model pull fails the deploy while
+the running service is untouched — not after it restarts into a broken state.
 
-## `notify.yaml` — general repo activity
+This is why there's no separate "run the installer on the server" step any more.
+`installer.ps1` is now **local dev machine setup only**.
 
-Separate from deploy/scrape — fires on push to **any** branch and on issue open/reopen/close. Posts to Discord with commit info (repo, branch, SHA, message, author) or issue info (title, opener, link). This is the one that pings on every push regardless of whether it's `master`.
+## Scheduled tasks
 
-## Secrets required
+Run by `Automations.yaml` (see [[Workflows]] for the full job wiring and the
+reasoning behind the times):
 
-`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `DISCORD_WEBHOOK`, `DISCORD_ROLE_ID` (only used in `notify.yaml`).
+| Task | Cadence | Cron (UTC) |
+|---|---|---|
+| `scrape` → `enrich` | 3×/week | Mon 08:00, Wed 14:00, Fri 20:00 |
+| `expired` (weekly expiry sweep) | 1×/week | Sat 06:00 |
+
+`enrich` runs after **every** scrape (`needs: scrape`, no schedule filter).
+`Tasks/embeddings.py` is **not scheduled** anywhere yet and must be run manually
+on the droplet.
+
+## Secrets
+
+`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `DISCORD_WEBHOOK`, `DISCORD_ROLE_ID`
+(only `notify.yaml`), `WIKI_DEPLOY_TOKEN` (only `wiki-sync.yaml`).
