@@ -197,11 +197,17 @@ class OllamaProvider(LLMProvider):
     Runs fully offline.
 
     pip install ollama
-    ollama pull deepseek-r1:8b  ( llama3.2, etc.)
+    ollama pull qwen2.5:3b-instruct  ( llama3.2, etc.)
     """
 
-    def __init__(self, model: str = "deepseek-r1:8b"):
+    # num_predict is a hard ceiling on generated tokens so a misbehaving
+    # model (runaway repetition on messy scraped text) can't generate
+    # forever; timeout is the wall-clock backstop if the server stalls.
+    NUM_PREDICT = 800
+
+    def __init__(self, model: str = "qwen2.5:3b-instruct", timeout: float = 120.0):
         self.model = model
+        self.timeout = timeout
         self._client = None
 
     def _get_client(self):
@@ -210,7 +216,10 @@ class OllamaProvider(LLMProvider):
                 import ollama
             except ImportError:
                 raise ImportError("Run: pip install ollama")
-            self._client = ollama
+            # ollama.Client forwards timeout straight to httpx.Client, so a
+            # stuck generation raises httpx.ReadTimeout instead of hanging
+            # forever. The module-level ollama.chat has no timeout at all.
+            self._client = ollama.Client(timeout=self.timeout)
         return self._client
 
     def complete(self, prompt: str) -> str | None:
@@ -219,6 +228,10 @@ class OllamaProvider(LLMProvider):
             model=self.model,
             messages=[{"role": "user", "content": prompt}],
             format="json",  # forces JSON output, same as response_format
-            options={"temperature": 0, "num_ctx": 8192},
+            options={
+                "temperature": 0,
+                "num_ctx": 8192,
+                "num_predict": self.NUM_PREDICT,
+            },
         )
         return response["message"]["content"]

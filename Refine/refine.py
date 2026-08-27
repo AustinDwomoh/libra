@@ -164,6 +164,38 @@ async def enrich_unenriched_jobs(
                     # Don't mark enriched — will retry next run
                     continue
 
+                # If the LLM stage timed out, any regex/scrape fields on `job` are
+                # still worth persisting, but don't burn the enriched flag on a
+                # partial result until we've retried a few times — a stuck
+                # generation on one job's text tends to recur (see the AbbVie hang).
+                llm_timed_out = "llm_timeout" in meta.get("stages_run", [])
+                if llm_timed_out:
+                    attempts = (row.get("enrich_attempts") or 0) + 1
+                    give_up = attempts >= MAX_ENRICH_ATTEMPTS
+                    try:
+                        payload = Job.to_dict_for_db(job)
+                        payload["enrich_attempts"] = attempts
+                        payload["enriched"] = give_up
+                        await db.upsert(
+                            "job_list", payload,
+                            conflict_column=["company", "location", "title", "apply_url"],
+                        )
+                    except Exception as e:
+                        Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
+                    if give_up:
+                        Config.logger.warning(
+                            f"Enrichment: giving up on job {job_id} after {attempts} "
+                            f"LLM timeouts — persisting partial enrichment"
+                        )
+                        stats["gave_up"] += 1
+                    else:
+                        Config.logger.warning(
+                            f"Enrichment: LLM timeout for job {job_id} "
+                            f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry"
+                        )
+                    stats["errors"] += 1
+                    continue
+
                 # Persist enriched fields + set enriched=true
                 try:
                     payload = Job.to_dict_for_db(job)

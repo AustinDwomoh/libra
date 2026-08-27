@@ -41,14 +41,14 @@ Simplify README + Speedy README + JSearch API
       FastAPI read-only routes (/jobs, /company, /search, /sponsor)
 ```
 
-Scraping runs on a cron schedule (5x/day); enrichment runs once/day plus on manual dispatch, so it stays decoupled from scraping and Ollama usage stays bounded.
+Scraping runs on a cron schedule (3x/week: Mon/Wed/Fri); enrichment runs as its own job right after every scrape, so it stays decoupled from scraping and Ollama usage stays bounded.
 
 ### Enrichment pipeline
 
 Three stages, each only filling fields still missing (never overwrites existing data):
 
 1. **Regex** (`Refine/extractor.py::RegexConstants`) — pay range, remote status, role type, years-of-experience, all from the description text. Includes anchor-keyword checks so bare number ranges (e.g. "3-5 years") aren't misread as salary.
-2. **LLM** (`Refine/llm.py`) — currently **Ollama** running `deepseek-r1:8b` locally. Output is JSON-repaired if malformed (`_try_repair_json`, with an optional `json_repair` library assist) and run through `JobDataSanitizer` (`Utils/sanitate.py`) to coerce types, clamp text lengths, and normalize `role_type`/`is_remote` before touching the DB.
+2. **LLM** (`Refine/llm.py`) — currently **Ollama** running `qwen2.5:3b-instruct` locally. Output is JSON-repaired if malformed (`_try_repair_json`, with an optional `json_repair` library assist) and run through `JobDataSanitizer` (`Utils/sanitate.py`) to coerce types, clamp text lengths, and normalize `role_type`/`is_remote` before touching the DB.
 3. **Scrape fallback** (`Service/Scrapper.py::Pirate`) — Playwright-first (falls back to `requests`), checks for a schema.org `JobPosting` JSON-LD block first (treated as authoritative, vendor-supplied ground truth), detects expired/dead listings via known URL patterns and text signals, then re-runs regex/LLM on whatever text it recovered.
 
 Jobs whose LLM output can't be parsed even after repair get `enrich_attempts` incremented and are retried up to `MAX_ENRICH_ATTEMPTS` (3) before being marked enriched anyway, so a persistently bad response doesn't loop forever.
@@ -107,7 +107,7 @@ Libra/
 | Database | asyncpg 0.31 | Async PostgreSQL driver with connection pooling |
 | Scraping | BeautifulSoup4, requests | Parse Simplify/Speedy GitHub READMEs, static fallback scraping |
 | Browser automation | Playwright 1.58 | Extract job descriptions from apply pages (Workday, Greenhouse, etc.) |
-| LLM enrichment | Ollama (`deepseek-r1:8b`) | Structured JSON extraction from descriptions, runs locally |
+| LLM enrichment | Ollama (`qwen2.5:3b-instruct`) | Structured JSON extraction from descriptions, runs locally |
 | Data processing | pandas 3.0, RapidFuzz 3.14 | Data manipulation, fuzzy deduplication |
 | Validation | Pydantic | Request/response models |
 
@@ -119,7 +119,7 @@ Libra/
 
 - Python 3.10+
 - PostgreSQL database
-- [Ollama](https://ollama.com) installed locally with `deepseek-r1:8b` pulled (`ollama pull deepseek-r1:8b`)
+- [Ollama](https://ollama.com) installed locally with `qwen2.5:3b-instruct` pulled (`ollama pull qwen2.5:3b-instruct`)
 - API keys (see below)
 
 ### Install
@@ -216,7 +216,7 @@ Base URL: `http://libra.austindwomoh.xyz`. Full details in [`wiki/API-Reference.
 
 ## Deployment
 
-Five GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy on push to `master`), `Automations.yaml` (scrape 5x/day, enrich 1x/day, weekly expiry re-validation, all via SSH to the DigitalOcean droplet), `notify.yaml` (Discord notifications on any push/issue activity), `PR checklist.yaml` (enforces the PR template checklist), and `wiki-sync.yaml` (mirrors this repo's `wiki/` folder into the GitHub Wiki on push). See [`wiki/Deployment-CI-CD.md`](./wiki/Deployment-CI-CD.md) for the full breakdown.
+Five GitHub Actions workflows (`.github/workflows/`): `deploy.yaml` (API deploy on push to `master` — pulls code, reasserts the full runtime environment, restarts the systemd service), `Automations.yaml` (scrape + enrich 3x/week Mon/Wed/Fri, weekly expiry re-validation on Saturday, all via SSH to the DigitalOcean droplet), `notify.yaml` (Discord notifications on any push/issue activity), `PR checklist.yaml` (enforces the PR template checklist), and `wiki-sync.yaml` (mirrors this repo's `wiki/` folder into the GitHub Wiki on push). See [`wiki/Workflows.md`](./wiki/Workflows.md) for the full per-workflow breakdown and [`wiki/Deployment-CI-CD.md`](./wiki/Deployment-CI-CD.md) for the droplet setup.
 
 ---
 

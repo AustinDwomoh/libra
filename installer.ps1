@@ -57,7 +57,7 @@ if ($IsMacOS) {
     }
     else {
         Write-Host "OK: ollama (python package)" -ForegroundColor Green
-        ollama pull deepseek-r1:8b
+        ollama pull qwen2.5:3b-instruct
     }
 }
 elseif ($IsWindows) {
@@ -69,7 +69,7 @@ elseif ($IsWindows) {
     }
     else {
         Write-Host "OK: ollama (python package)" -ForegroundColor Green
-        ollama pull deepseek-r1:8b
+        ollama pull qwen2.5:3b-instruct
     }
 }
 else {

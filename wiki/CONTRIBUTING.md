@@ -29,7 +29,7 @@ worth five minutes so you don't spend an hour rediscovering one of them.
 - PostgreSQL database (local or remote)
 - [Ollama](https://ollama.com) installed locally, with the model pulled:
   ```bash
-  ollama pull deepseek-r1:8b
+  ollama pull qwen2.5:3b-instruct
   ```
 - API keys — you'll need a `JSearch_API_Key` at minimum (ask in Discord if you don't
   have one yet; there's no self-serve signup documented here)
