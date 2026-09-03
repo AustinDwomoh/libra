@@ -4,7 +4,10 @@ from typing import List, Dict, Optional
 import requests,json
 from Utils.models import Job
 from Utils.constants import PositionType,JSearchConfig, SearchQueries,DatePosted, FilePaths, LogMessages, Defaults,Config
+from Utils.run_logging import get_logger, logged_section
 from JobSource.base import JobSourceBase
+
+logger = get_logger(__name__)
 
 
 class JSearch(JobSourceBase):
@@ -68,7 +71,7 @@ class JSearch(JobSourceBase):
     async def _process_response(self, response: requests.Response, search_query: str) -> List[Job]:
         data = response.json()
         jobs = data.get("data") if data.get("data") is not None else data
-        Config.logger.info(LogMessages.jobs_found(len(jobs), search_query))
+        logger.info(LogMessages.jobs_found(len(jobs), search_query))
         self._save_raw_jobs(jobs)
         return await self._map_jobs(jobs)
 
@@ -79,7 +82,7 @@ class JSearch(JobSourceBase):
             with open(FilePaths.JSEARCH_RAW_JOBS, "w", encoding="utf-8") as f:
                 json.dump(jobs, f, ensure_ascii=False, indent=4)
         except Exception as e:
-            Config.logger.warning(f"Could not save raw JSearch jobs: {e}")
+            logger.warning(f"Could not save raw JSearch jobs: {e}")
 
     # ============================================================================ #
     #                          POSITION TYPE HELPERS                               #
@@ -136,6 +139,7 @@ class JSearch(JobSourceBase):
     #                                 FETCH FNS                                    #
     # ============================================================================ #
 
+    @logged_section("fetch_jobs")
     async def fetch_jobs(self, queries: Optional[List[str]] = None, position_type: PositionType = PositionType.INTERN, date_posted: DatePosted = DatePosted.WEEK, rate_limit_delay: float = JSearchConfig.RATE_LIMIT_DELAY) -> List[Job]:
         """
         Fetch jobs across multiple search queries with rate limiting.
@@ -157,17 +161,17 @@ class JSearch(JobSourceBase):
         all_jobs = []
 
         for i, query in enumerate(queries):
-            Config.logger.info(f"JSearch: Query {i + 1}/{len(queries)}")
+            logger.info(f"JSearch: Query {i + 1}/{len(queries)}")
             jobs = await self.fetch_positions(query, position_type=position_type, date_posted=date_posted)
             all_jobs.extend(jobs)
 
             if i < len(queries) - 1:
-                Config.logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
+                logger.debug(f"JSearch: Waiting {rate_limit_delay}s...")
                 await asyncio.sleep(rate_limit_delay)
-        Config.logger.info(f"JSearch: {len(all_jobs)} jobs before deduplication")
+        logger.info(f"JSearch: {len(all_jobs)} jobs before deduplication")
 
         unique_jobs = list(set(all_jobs))  # Rely on Job's __hash__ and __eq__ for deduplication
-        Config.logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
+        logger.info(f"JSearch: {len(unique_jobs)} unique positions fetched")
         return unique_jobs
 
     async def fetch_positions(self, query: str = "", position_type: PositionType = PositionType.INTERN, page: int = 1, date_posted: DatePosted = DatePosted.WEEK, retry_count: int = JSearchConfig.DEFAULT_RETRY_COUNT) -> List[Job]:
@@ -185,7 +189,7 @@ class JSearch(JobSourceBase):
             List of Job objects, or [] on failure.
         """
         search_query = self._build_search_query(query, position_type)
-        Config.logger.info(
+        logger.info(
             f"JSearch: Fetching {position_type} results for '{search_query}' (posted: {date_posted.value})"
         )
 
@@ -205,12 +209,12 @@ class JSearch(JobSourceBase):
                         response = self._make_request(params)
 
                         if response.status_code in (401, 403):
-                            Config.logger.error(f"JSearch: {response.status_code} - check your API key")
+                            logger.error(f"JSearch: {response.status_code} - check your API key")
                             return []
 
                         if response.status_code == 429:
                             wait_time = (attempt + 1) * JSearchConfig.RATE_LIMIT_WAIT_MULTIPLIER
-                            Config.logger.warning(f"JSearch: Rate limited. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})")
+                            logger.warning(f"JSearch: Rate limited. Waiting {wait_time}s (attempt {attempt + 1}/{retry_count})")
                             await asyncio.sleep(wait_time)
                             continue
 
@@ -218,7 +222,7 @@ class JSearch(JobSourceBase):
                         return await self._process_response(response, search_query)
 
                     except requests.RequestException as e:
-                        Config.logger.error(f"JSearch API error: {e}")
+                        logger.error(f"JSearch API error: {e}")
                         if attempt < retry_count - 1:
                             await asyncio.sleep(JSearchConfig.RETRY_DELAY)
                             continue
@@ -229,7 +233,7 @@ class JSearch(JobSourceBase):
                 stop_ticker.set()
                 ticker.join(timeout=1)
 
-        Config.logger.error(f"JSearch: All {retry_count} retry attempts failed")
+        logger.error(f"JSearch: All {retry_count} retry attempts failed")
         return []
 
 
@@ -240,7 +244,7 @@ async def main():
     print(f"Total unique jobs fetched: {len(jobs)}")
     with open(FilePaths.JSEARCH_JOBS, 'w', encoding='utf-8') as f:
         json.dump(jobs, f, ensure_ascii=False, indent=4)
-    Config.logger.info(f"Total jobs fetched: {len(jobs)}")
+    logger.info(f"Total jobs fetched: {len(jobs)}")
 
 if __name__ == "__main__":
     asyncio.run(main())

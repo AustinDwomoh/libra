@@ -5,10 +5,13 @@ import httpx
 
 from Refine.llm import  LLMProvider, OllamaProvider
 from Utils.constants import Config
+from Utils.run_logging import get_logger
 from Utils.models import Job
 from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
 from tqdm import tqdm
+
+logger = get_logger(__name__)
 
 # Wall-clock ceiling for a single provider.extract() call, enforced on the
 # event loop. Sits slightly above OllamaProvider's own client timeout (120s)
@@ -300,7 +303,7 @@ class JobEnricher:
                 f"job {self.job_id}: LLM extract() timed out after "
                 f"{LLM_EXTRACT_TIMEOUT:.0f}s ({type(e).__name__})"
             )
-            Config.logger.warning(
+            logger.warning(
                 f"job {self.job_id}: LLM extract() timed out, skipping LLM stage"
             )
             return None
@@ -353,7 +356,7 @@ class JobEnricher:
             if extracted is None:
                 # timed out — description is already filled from the scrape,
                 # so just stop here and let the caller persist what we have
-                Config.logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
+                logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
                 return self.meta
 
             job_expired = extracted.pop("job_expired", None)
@@ -376,8 +379,8 @@ class JobEnricher:
             filled = self._apply_to_job(job, extracted)
             self.meta["fields_filled"].extend(f"{f} (llm+scrape)" for f in filled)
 
-        Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
-        Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
+        logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
+        logger.info(f"Done. Filled: {self.meta['fields_filled']}")
         return self.meta
     
     def _apply_structured_data(self, job: "Job", structured: dict) -> list[str]:
@@ -415,13 +418,13 @@ class JobEnricher:
         db = await JobDatabase.create()
         await db.update( table="job_list", filters={"id": self.job_id}, data={"status": "expired", "enriched": True},)
         self.meta["expired"] = True
-        Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
+        logger.info(f"Done. Filled: {self.meta['fields_filled']}")
         
     async def _run_scrape(self, job: "Job"):
         if not job.apply_url:
             return
         missing = self._missing_fields(job)
-        Config.logger.info(f"Scraping apply URL for: {missing}")
+        logger.info(f"Scraping apply URL for: {missing}")
    
         self.meta["stages_run"].append("scrape")
         scraped = await self.scrapper.scrape_apply_url(job.apply_url)
@@ -437,13 +440,13 @@ class JobEnricher:
             self.meta["fields_filled"].extend(f"{f} (structured)"for f in filled)
 
             if (self._missing_fields(job) and self.use_llm and self.provider ):
-                Config.logger.info(f"LLM on structured description for: {missing}")
+                logger.info(f"LLM on structured description for: {missing}")
                 self.meta["stages_run"].append("llm_structured_desc")
                 #since if its sturtured u can just uses the get dict
                 extracted = await self._llm_extract(job, scraped.get("description"))  # type: ignore
                 if extracted is None:
                     # timed out — persist the structured-data fields we already have
-                    Config.logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
+                    logger.info(f"Done (LLM skipped). Filled: {self.meta['fields_filled']}")
                     return self.meta
 
                 job_expired = extracted.pop("job_expired", None)
@@ -465,21 +468,21 @@ class JobEnricher:
 
                 filled = self._apply_to_job(job, extracted)
                 self.meta["fields_filled"].extend(f"{f} (llm+structured)" for f in filled)
-                Config.logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
-                Config.logger.info(f"Done. Filled: {self.meta['fields_filled']}")
+                logger.info(f"Finished enriching job: {job.title} at {job.company} for {job}")
+                logger.info(f"Done. Filled: {self.meta['fields_filled']}")
                 return self.meta
            
-        Config.logger.info(f"Scraped text length: raw={len(scraped.raw_text)}, trimmed={len(scraped.trimmed_text)}")  #type: ignore
-        Config.logger.debug(f"Scraped text (trimmed): {scraped.trimmed_text[:500]}")     #type: ignore
+        logger.info(f"Scraped text length: raw={len(scraped.raw_text)}, trimmed={len(scraped.trimmed_text)}")  #type: ignore
+        logger.debug(f"Scraped text (trimmed): {scraped.trimmed_text[:500]}")     #type: ignore
 
         await self._handle_scraped_text(job, scraped)
 
     async def enrich_job(self, job: "Job") -> dict:
-        Config.logger.info(f"Enriching job: {job.title} at {job.company} for {job}")
+        logger.info(f"Enriching job: {job.title} at {job.company} for {job}")
         if not self._missing_fields(job):
-            Config.logger.info("Job already complete, skipping enrichment")
+            logger.info("Job already complete, skipping enrichment")
             return self.meta
-        Config.logger.info(f"Enriching '{job.title}' — missing: {self._missing_fields(job)}")
+        logger.info(f"Enriching '{job.title}' — missing: {self._missing_fields(job)}")
         
         await self._run_regex(job) #stage 1: regex
        
@@ -504,7 +507,7 @@ class JobEnricher:
         results = []
         with tqdm(total=len(jobs), desc="Enriching Batch Jobs", unit="job", ncols=100) as pbar:
             for i, job in enumerate(jobs):
-                Config.logger.info(f"Job {i+1}/{len(jobs)}")
+                logger.info(f"Job {i+1}/{len(jobs)}")
                 meta = await self.enrich_job(job)
                 results.append(meta)
                 if self.use_llm and i < len(jobs) - 1:

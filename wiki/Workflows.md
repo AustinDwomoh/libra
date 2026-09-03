@@ -116,11 +116,16 @@ load) — nothing here depends on exact timing.
 
 ### Jobs
 
-| Job | `needs` | Runs when | Script | Log | Discord |
+| Job | `needs` | Runs when | Script | Raw log redirect | Discord |
 |---|---|---|---|---|---|
-| `scrape` | — | its 3 crons **or** manual dispatch | `Tasks/scrape.py` | `logs/scrape.log` | on failure |
-| `enrich` | `scrape` | **every time `scrape` runs** | `Tasks/enrich.py` | `logs/enrich.log` | on failure |
-| `expired` | — | Sat cron **or** manual dispatch | `Tasks/expired.py` | `logs/expired.log` | on **success and failure**, with the log file attached |
+| `scrape` | — | its 3 crons **or** manual dispatch | `Tasks/scrape.py` | `logs/scrape.log` | on failure (text); the script posts its run's `combined.log` on success |
+| `enrich` | `scrape` | **every time `scrape` runs** | `Tasks/enrich.py` | `logs/enrich.log` | on failure (text); the script posts its run's `combined.log` on success |
+| `expired` | — | Sat cron **or** manual dispatch | `Tasks/expired.py` | `logs/expired.log` | on **success and failure**, with `logs/expired.log` attached |
+
+Each job also exports `TQDM_DISABLE=1` before the Python call so the raw
+redirect (and the file `expired` attaches) has no progress-bar spam. The
+per-run structured logs live in `logs/run_<ts>_pid<pid>/` regardless — see
+[[Logging]].
 
 - **`scrape`** has an explicit `if` limiting it to its own three cron strings
   (plus `workflow_dispatch`). Without it, `scrape` would also fire on the Sat
@@ -134,8 +139,10 @@ load) — nothing here depends on exact timing.
   daily scrapes) is gone now that scrape itself only fires 3×/week.
 - **`expired`** runs `git reset --hard` first (like `scrape`), then
   `Tasks/expired.py` with `set -uo pipefail` (**no `-e`** — a failing Python run
-  must still reach the notify step). It always posts to Discord and attaches
-  `logs/expired.log` to the message.
+  must still reach the notify step). The CI shell wrapper (not the script) always
+  posts to Discord and attaches the raw `logs/expired.log` redirect — deliberately
+  the redirect, not the run's `combined.log`, so a Python crash *before* the
+  script's own notify call still ships a log.
 
 ### Not scheduled here
 
@@ -153,7 +160,9 @@ PYTHONPATH=. python3 Tasks/scrape.py
 ```
 
 Nothing CI-only is imported by them — the workflow only wraps the same
-entrypoints in SSH + logging + Discord.
+entrypoints in SSH + a raw stdout redirect + Discord. Structured per-run logs
+(`logs/run_<ts>_pid<pid>/`) are written the same way locally or in CI — see
+[[Logging]].
 
 ---
 

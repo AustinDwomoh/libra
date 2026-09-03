@@ -7,10 +7,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from Utils.models import Job
 from Utils.constants import JobSource, SimplifyConfig, Defaults, FilePaths, Config
+from Utils.run_logging import get_logger, logged_section
 from JobSource.base import JobSourceBase
 from tqdm import tqdm
 
-logger = Config.logger
+logger = get_logger(__name__)
 
 
 class Simplify(JobSourceBase):
@@ -270,6 +271,7 @@ class Simplify(JobSourceBase):
         
         return False
     
+    @logged_section("fetch_jobs")
     async def fetch_jobs(self) -> List[Job]:
         self.fetch_readme()
         jobs = await self.parse_tables()

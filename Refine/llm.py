@@ -6,8 +6,11 @@ import json, re
 #from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
 
 from Utils.constants import Config
+from Utils.run_logging import get_logger
 from Utils.models import Job
-from Utils.sanitate import JobDataSanitizer 
+from Utils.sanitate import JobDataSanitizer
+
+logger = get_logger(__name__)
 
 # ─── Base Class ────────────────────────────────────────────────────────────────
 
@@ -110,21 +113,21 @@ class LLMProvider(ABC):
         # up unmodified — those are transient and shouldn't be conflated
         # with a parse failure.
         raw = self.complete(prompt)
-        Config.logger.debug(f"[{self.__class__.__name__}] Raw LLM response: {raw!r}")
+        logger.debug(f"[{self.__class__.__name__}] Raw LLM response: {raw!r}")
         cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
         try:
             data = json.loads(cleaned)
             return JobDataSanitizer().sanitize(data)
         except json.JSONDecodeError as e:
-            Config.logger.warning(
+            logger.warning(
                 f"[{self.__class__.__name__}] JSON parse failed, attempting repair: {e}"
             )
             repaired = _try_repair_json(cleaned)
             if repaired is not None:
-                Config.logger.info(f"[{self.__class__.__name__}] JSON repair succeeded")
+                logger.info(f"[{self.__class__.__name__}] JSON repair succeeded")
                 return JobDataSanitizer().sanitize(repaired)
 
-            Config.logger.error(
+            logger.error(
                 f"[{self.__class__.__name__}] JSON repair failed, giving up on this "
                 f"response. Raw (truncated): {cleaned[:300]!r}"
             )
@@ -165,12 +168,12 @@ class LLMProvider(ABC):
         try:
             raw = self.complete(prompt)
         except Exception as e:
-            Config.logger.warning(
+            logger.warning(
                 f"[{self.__class__.__name__}] check_expired completion failed: {e}"
             )
             return None
 
-        Config.logger.debug(f"[{self.__class__.__name__}] Raw expired-check response: {raw!r}")
+        logger.debug(f"[{self.__class__.__name__}] Raw expired-check response: {raw!r}")
         cleaned = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
 
         try:
@@ -179,7 +182,7 @@ class LLMProvider(ABC):
             data = _try_repair_json(cleaned)
 
         if not isinstance(data, dict) or "expired" not in data:
-            Config.logger.warning(
+            logger.warning(
                 f"[{self.__class__.__name__}] check_expired: no clear verdict in "
                 f"response (truncated): {cleaned[:200]!r}"
             )

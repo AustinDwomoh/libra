@@ -1,11 +1,14 @@
 from uuid import UUID
 
 from Utils.constants import Config
+from Utils.run_logging import get_logger
 import ssl, asyncpg, json
 import uuid
 import datetime
 from pgvector.asyncpg import register_vector
 from pgvector import Vector
+
+logger = get_logger(__name__)
 
 
 class JobDatabase:
@@ -90,7 +93,7 @@ class JobDatabase:
                 rows = await conn.fetch(sql, *params)
                 return [dict(r) for r in rows]
         except Exception as e:
-            Config.logger.error(f"Error during select from {table}: {e}")
+            logger.error(f"Error during select from {table}: {e}")
             raise
 
     async def selectOne(
@@ -104,7 +107,7 @@ class JobDatabase:
             row = await self.select(table, columns=columns, filters=filters, order_by=order_by, limit=1)
             return row[0] if row else {}
         except Exception as e:
-            Config.logger.error(f"Error during selectOne from {table}: {e}")
+            logger.error(f"Error during selectOne from {table}: {e}")
             raise
 
     async def get_or_create_company(self, name: str) -> UUID:
@@ -161,7 +164,7 @@ class JobDatabase:
                 row = await conn.fetchrow(sql, *values)
                 return dict(row) if row else {}
         except Exception as e:
-            Config.logger.error(f"Error during upsert to {table}: {e}")
+            logger.error(f"Error during upsert to {table}: {e}")
             raise
 
     async def bulk_upsert(self, table: str, rows: list[dict], conflict_column: str | list | None = None)-> list[dict]:
@@ -199,7 +202,7 @@ class JobDatabase:
                 result = await conn.fetch(sql, *values)
                 return [dict(r) for r in result]
         except Exception as e:
-            Config.logger.error(f"Error during bulk_upsert to {table}: {e}")
+            logger.error(f"Error during bulk_upsert to {table}: {e}")
             raise
 
     async def update(self, table: str, data: dict, filters: dict) -> dict:
@@ -212,7 +215,7 @@ class JobDatabase:
                 row = await conn.fetchrow(sql, *all_params)
                 return dict(row) if row else {}
         except Exception as e:
-            Config.logger.error(f"Error during update to {table}: {e}")
+            logger.error(f"Error during update to {table}: {e}")
             raise
 
     async def delete(self, table: str, filters: dict)-> list[dict]:
@@ -224,7 +227,7 @@ class JobDatabase:
             async with self.pool.acquire() as conn:
                 return await conn.fetch(sql, *list(filters.values()))
         except Exception as e:
-            Config.logger.error(f"Error during delete from {table}: {e}")
+            logger.error(f"Error during delete from {table}: {e}")
             raise
 
     async def call_function(self, fn: str, params=None, fetch_type=None):
@@ -241,7 +244,7 @@ class JobDatabase:
                 else:
                     return await conn.fetch(sql, *params)
         except Exception as e:
-            Config.logger.error(f"Error during call_function {fn}: {e}")
+            logger.error(f"Error during call_function {fn}: {e}")
             raise
 
     # ----------------------------------------------------
@@ -253,7 +256,7 @@ class JobDatabase:
                 rows = await conn.fetch(sql, *params)
                 return [dict(r) for r in rows]
         except Exception as e:
-            Config.logger.error(f"Error during raw query: {e}")
+            logger.error(f"Error during raw query: {e}")
             raise
 
     # ----------------------------------------------------

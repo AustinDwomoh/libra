@@ -9,6 +9,9 @@ import json,re,os,logging
 
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+
+from Utils.run_logging import get_logger, logged_section, current_process, run_dir, combined_log, RUN_DIR
+
 load_dotenv()
 
 class PositionType(Enum):
@@ -174,19 +177,16 @@ class Config:
     REQUEST_TIMEOUT = 30
     #GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     #GOOGLE_CX = os.getenv("GOOGLE_CX")
-    LOG_FILE = os.makedirs("logs", exist_ok=True) or "logs/run.log"
     JSEARCH_API_URL = "https://api.openwebninja.com/jsearch/search"
     J_SEARCH_API_KEY = os.getenv("JSearch_API_Key")
-    file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
-    file_handler.setLevel(logging.DEBUG)
 
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[file_handler],
-        force=True,
-    )
-    logger = logging.getLogger(__name__)
+    # Per-run, per-module logging. Every process start writes to its own
+    # logs/run_<ts>_pid<pid>/ folder (see Utils/run_logging.py). Modules should
+    # prefer their own file via ``Config.get_logger(__name__)``; ``Config.logger``
+    # is the shared fallback that lands in app.log + combined.log.
+    logger = get_logger("app")
+    get_logger = staticmethod(get_logger)
+    RUN_DIR = RUN_DIR
     GEMINI_KEY = os.getenv("GEMINI_KEY")
     DB_HOST = os.getenv("DB_HOST")
     DB_NAME = os.getenv("DB_NAME")

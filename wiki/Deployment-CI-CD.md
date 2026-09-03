@@ -10,7 +10,8 @@ A DigitalOcean droplet (4 GB RAM, Linux). Everything lives at `/var/www/libra/`:
 ```
 /var/www/libra/
 ├── libra/            # the virtualenv (source libra/bin/activate)
-├── logs/             # scrape.log, enrich.log, expired.log, run.log
+├── logs/             # per-run folders run_<ts>_pid<pid>/ + LATEST_RUN.txt; see [[Logging]]
+│                     #   (plus raw scrape.log / enrich.log / expired.log redirects from CI)
 ├── .env              # DB creds, API keys (not in git)
 └── <repo checkout>   # kept exactly at origin/master by every deploy
 ```

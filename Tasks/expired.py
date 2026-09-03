@@ -39,11 +39,14 @@ import aiohttp,threading
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 from Utils.constants import Config
+from Utils.run_logging import get_logger, logged_section
 from Refine.llm import LLMProvider, OllamaProvider
 from Service.Scrapper import Pirate, ScrapeResult
 from Service.db import JobDatabase
 from Utils.notify import notify_discord
 from datetime import datetime, timezone
+
+logger = get_logger(__name__)
 
 
 class ExpiryChecker:
@@ -173,7 +176,7 @@ class ExpiryChecker:
                     return None
                 return False
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            Config.logger.warning(f"Tier 1 check failed for {url}: {e}")
+            logger.warning(f"Tier 1 check failed for {url}: {e}")
             return None
 
     # ─── Tiers 2/3: Playwright scrape, then LLM — expired signal only ─────
@@ -198,7 +201,7 @@ class ExpiryChecker:
             # count, and definitely doesn't get treated as expired.
             if scraped.get("blocked"):
                 self.metrics["blocked"] += 1
-                Config.logger.warning(
+                logger.warning(
                     f"Scrape blocked (HTTP {scraped.get('status_code')}) for {apply_url}"
                 )
                 return None
@@ -235,7 +238,7 @@ class ExpiryChecker:
         try:
             is_expired = await asyncio.to_thread(self.provider.check_expired, text_for_llm)
         except Exception as e:
-            Config.logger.warning(f"check_expired failed for deep check: {e}")
+            logger.warning(f"check_expired failed for deep check: {e}")
             return None
         if is_expired is None:
             return None  # model gave no clear verdict — stay inconclusive
@@ -270,7 +273,7 @@ class ExpiryChecker:
             columns=["id", "apply_url"],
         )
 
-        Config.logger.info(f"Weekly expiry check: {len(jobs)} non-expired jobs to check")
+        logger.info(f"Weekly expiry check: {len(jobs)} non-expired jobs to check")
 
         async with aiohttp.ClientSession() as session:
             tasks = [asyncio.create_task(self._check_one(session, job)) for job in jobs]
@@ -315,7 +318,7 @@ class ExpiryChecker:
                 params=[newly_expired_ids],
             )
 
-        Config.logger.info(
+        logger.info(
             f"Weekly expiry check done — checked: {self.metrics['checked']}, "
             f"newly expired: {self.metrics['newly_expired']}, "
             f"failed: {self.metrics['failed']}, "
@@ -326,6 +329,7 @@ class ExpiryChecker:
         )
         return self.metrics
     
+@logged_section("weekly_expiry_check")
 async def run_weekly_expiry_check() -> None:
     """Entry point for the scheduled (cron/systemd timer) job."""
     db = await JobDatabase.create()

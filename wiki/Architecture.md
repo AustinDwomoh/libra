@@ -66,4 +66,18 @@ Tasks/expired.py       — ExpiryChecker.run(): three-tier (HTTP → Playwright 
                           of active jobs, reusing Pirate.scrape_apply_url() and check_expired()
 ```
 
+## Logging & run tracing
+
+`Utils/run_logging.py` gives every process its own `logs/run_<ts>_pid<pid>/`
+folder: one file per module (`azalea.log`, `jsearch.log`, …), a `combined.log`,
+and a `flow.log` that traces which stage ran in what order. The pipeline stages
+(`azalea.run` → `fetch_all_sources` → per-source `fetch_jobs` → `dedup` →
+`save_to_db` → `enrich`, plus `expired` / `embeddings` / the API's `serve`) are
+each wrapped in a `section()` that writes `ENTER`/`EXIT` markers with a
+`(from: …)` back-pointer, so `flow.log` alone shows the full run shape. Terminal
+output is trimmed to warnings/errors + section banners; full detail is in the
+files. See [[Logging]].
+
+---
+
 See [[Enrichment-Pipeline]] for the full per-stage breakdown, [[Database-Layer]] for schema/`JobDatabase` details, and [[Workflows]] for the actual schedule/workflow wiring.
