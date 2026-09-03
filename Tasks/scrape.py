@@ -7,12 +7,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from Utils.notify import notify_discord
 from Service.azalea import Azalea
 from Utils.constants import PositionType
+from Utils.run_logging import get_logger, combined_log
+
+logger = get_logger(__name__)
 
 async def main():
-    azalea = Azalea()
-    await azalea.run(position_type=PositionType.INTERN, save_json=False)
-    #await azalea.run(position_type=PositionType.FULLTIME, save_json=False)
-    notify_discord("Scraping process completed successfully.", file_path="logs/scrape.log")
+    with logger.section("scrape", position_type="intern"):
+        azalea = Azalea()
+        await azalea.run(position_type=PositionType.INTERN, save_json=False)
+        #await azalea.run(position_type=PositionType.FULLTIME, save_json=False)
+    notify_discord("Scraping process completed successfully.", file_path=str(combined_log()))
 
 if __name__ == "__main__":
     asyncio.run(main())

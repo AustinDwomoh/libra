@@ -14,6 +14,7 @@ Internal reference for the Libra job-scraping/enrichment pipeline. This is not u
 - [[API-Reference]] — every FastAPI route, params, response shape
 - [[Workflows]] — every GitHub Actions workflow: triggers, jobs, the 3×/week scrape + weekly expiry cron, secrets
 - [[Deployment-CI-CD]] — the droplet layout, venv/systemd, and the self-sufficient deploy script
+- [[Logging]] — per-run/per-module log folders, `section()` enter/exit trace, terminal vs. files
 - [[Diagrams]] — index of all Mermaid class/sequence diagrams in `docs/diagrams`
 - [[Roadmap]] — planned/unfinished work, known bugs
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — new-contributor setup, workflow, and PR checklist walkthrough
@@ -39,6 +40,7 @@ Libra/
 ├── Utils/
 │   ├── models.py           # Job (now with summary), Company, JobStats dataclasses
 │   ├── constants.py        # Config, enums, LLMConstants (prompt template)
+│   ├── run_logging.py      # per-run/per-module logger + section() trace — see [[Logging]]
 │   ├── sanitate.py         # JobDataSanitizer — cleans/coerces raw LLM JSON
 │   └── notify.py           # Discord webhook helper
 ├── Tasks/

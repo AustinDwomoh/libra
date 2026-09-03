@@ -54,6 +54,9 @@ jobs:
             mkdir -p logs
 
             pip install -r requirements.txt --upgrade-strategy only-if-needed
+            # TQDM_DISABLE keeps progress bars out of the captured log; the
+            # script also posts its own per-run logs/run_*/combined.log to Discord.
+            export TQDM_DISABLE=1
             PYTHONPATH=/var/www/libra python3 Tasks/scrape.py > logs/scrape.log 2>&1
 
       - name: Notify Discord on failure
@@ -95,6 +98,9 @@ jobs:
 
              mkdir -p logs
 
+             # TQDM_DISABLE keeps progress bars out of the captured log; the
+             # script also posts its own per-run logs/run_*/combined.log to Discord.
+             export TQDM_DISABLE=1
              PYTHONPATH=/var/www/libra python3 Tasks/enrich.py > logs/enrich.log 2>&1
 
        - name: Notify Discord on failure
@@ -142,6 +148,9 @@ jobs:
             git fetch origin
             git reset --hard origin/master
 
+            # TQDM_DISABLE keeps progress bars out of "$LOG_FILE", which is
+            # attached to the Discord notification below.
+            export TQDM_DISABLE=1
             PYTHONPATH=/var/www/libra python3 Tasks/expired.py > "$LOG_FILE" 2>&1
             STATUS=$?
 

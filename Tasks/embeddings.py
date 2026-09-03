@@ -10,9 +10,12 @@ import asyncio,threading
 from tqdm import tqdm
 import httpx
 from Utils.constants import Config
+from Utils.run_logging import get_logger, logged_section, combined_log
 from Service.db import JobDatabase
 from Utils.notify import notify_discord
 from pgvector  import Vector
+
+logger = get_logger(__name__)
 
 OLLAMA_HOST = "http://localhost:11434"
 
@@ -79,7 +82,7 @@ async def maybe_promote_to_example_bank(job: dict, db: JobDatabase, embedding: V
         conflict_column=["source_job_id"],
     )
     
-    Config.logger.info(f"Promoted {row} to enrichment_examples")
+    logger.info(f"Promoted {row} to enrichment_examples")
     return f"Promoted {job.get('id')} to enrichment_examples"
 
 
@@ -96,6 +99,7 @@ def _build_embedding_text(job: dict) -> str:
     return "\n".join(p for p in parts if p)
 
 
+@logged_section("embedding_pass")
 async def run_embedding_pass(batch_size: int = 50) -> dict:
     db = await JobDatabase.create()
     stats = {"attempted": 0, "embedded": 0, "promoted": 0, "errors": 0}
@@ -109,10 +113,10 @@ async def run_embedding_pass(batch_size: int = 50) -> dict:
     )
 
     if not rows:
-        Config.logger.info(f"Embedding pass: nothing pending.Rows{len(rows)}")
+        logger.info(f"Embedding pass: nothing pending.Rows{len(rows)}")
         return stats
 
-    Config.logger.info(f"Embedding pass: {len(rows)} jobs to embed")
+    logger.info(f"Embedding pass: {len(rows)} jobs to embed")
     with tqdm(total=len(rows), desc="Checking jobs", unit="job", ncols=100) as pbar:
         stop_ticker = threading.Event()
         ticker = threading.Thread(
@@ -142,7 +146,7 @@ async def run_embedding_pass(batch_size: int = 50) -> dict:
                        "enrich_attempts": job.get("enrich_attempts", 0)
                     })
             except Exception as e:
-                Config.logger.error(f"Embedding pass failed for {job.get('id')}: {e}")
+                logger.error(f"Embedding pass failed for {job.get('id')}: {e}")
                 stats["errors"] += 1
         stop_ticker.set()
         ticker.join()
@@ -150,7 +154,7 @@ async def run_embedding_pass(batch_size: int = 50) -> dict:
 
     notify_discord(
         message=f"Embedding pass complete — embedded: {stats['embedded']}, promoted: {stats['promoted']}, errors: {stats['errors']}",
-        file_path="embedded_jobs.txt",
+        file_path=str(combined_log()),
     )
     return stats
 

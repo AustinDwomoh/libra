@@ -11,11 +11,14 @@ import asyncio,uuid,threading
 from tqdm import tqdm
 from typing import Optional
 from Utils.constants import Config
+from Utils.run_logging import get_logger, logged_section
 from Service.db import JobDatabase
 from Refine.extractor import JobEnricher
 from Refine.llm import OllamaProvider, LLMProvider, LLMParseError
 from Utils.models import Job
 import json
+
+logger = get_logger(__name__)
 
 # Fields we want  to fill. Enrichment is skipped entirely if all are present.
 ENRICH_FIELDS = ("description", "is_remote", "role_type", "pay_range", "tags")
@@ -57,6 +60,7 @@ def _row_to_job(row: dict) -> Job:
 
 
 
+@logged_section("enrich_unenriched_jobs")
 async def enrich_unenriched_jobs(
     provider: Optional[LLMProvider] = None,
     use_llm: bool = True,
@@ -89,10 +93,10 @@ async def enrich_unenriched_jobs(
     # This way, we can prioritize enriching the jobs that are more likely to be applied to and increase the chances of successful placements.
     
     if not rows:
-        Config.logger.info("Enrichment: no unenriched jobs found.")
+        logger.info("Enrichment: no unenriched jobs found.")
         return stats
 
-    Config.logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
+    logger.info(f"Enrichment: {len(rows)} jobs to process (batch_size={batch_size})")
     ENRICHED = []
     with tqdm(total=len(rows), desc="Enriching jobs", unit="job", ncols=100) as pbar:
         stop_ticker = threading.Event()
@@ -117,16 +121,16 @@ async def enrich_unenriched_jobs(
                 try:
                     job = _row_to_job(row)
                 except (ValueError, KeyError) as e:
-                    Config.logger.warning(f"Enrichment: could not reconstruct job {job_id}: {e}")
+                    logger.warning(f"Enrichment: could not reconstruct job {job_id}: {e}")
                     await _mark_enriched(db, job_id)   # don't retry broken rows forever
                     stats["errors"] += 1
                     continue
 
                 try:
-                    Config.logger.debug(f"Job item before enrichment {job_id}: {job}")
+                    logger.debug(f"Job item before enrichment {job_id}: {job}")
                     meta = await enricher.enrich_job(job)
-                    Config.logger.debug(f"Job item after enrichment {job_id}: {job}")
-                    Config.logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
+                    logger.debug(f"Job item after enrichment {job_id}: {job}")
+                    logger.debug(f"Enrichment [{i+1}/{len(rows)}] {job.title}: {meta['fields_filled']}")
                 except LLMParseError as e:
                     # The model's output was unparseable even after repair attempts.
                     # This is more likely a persistent issue (bad model, weird input
@@ -134,7 +138,7 @@ async def enrich_unenriched_jobs(
                     # forever.
                     attempts = (row.get("enrich_attempts") or 0) + 1
                     if attempts >= MAX_ENRICH_ATTEMPTS:
-                        Config.logger.warning(
+                        logger.warning(
                             f"Enrichment: giving up on job {job_id} after {attempts} "
                             f"unparseable LLM responses: {e}"
                         )
@@ -145,7 +149,7 @@ async def enrich_unenriched_jobs(
                         )
                         stats["gave_up"] += 1
                     else:
-                        Config.logger.warning(
+                        logger.warning(
                             f"Enrichment: unparseable LLM response for job {job_id} "
                             f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry: {e}"
                         )
@@ -159,7 +163,7 @@ async def enrich_unenriched_jobs(
                 except Exception as e:
                     # Network errors, rate limits, DB hiccups, etc. — treat as
                     # transient and don't count against the job; just retry next run.
-                    Config.logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
+                    logger.error(f"Enrichment: enrich_job failed for {job_id}: {e}")
                     stats["errors"] += 1
                     # Don't mark enriched — will retry next run
                     continue
@@ -181,15 +185,15 @@ async def enrich_unenriched_jobs(
                             conflict_column=["company", "location", "title", "apply_url"],
                         )
                     except Exception as e:
-                        Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
+                        logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
                     if give_up:
-                        Config.logger.warning(
+                        logger.warning(
                             f"Enrichment: giving up on job {job_id} after {attempts} "
                             f"LLM timeouts — persisting partial enrichment"
                         )
                         stats["gave_up"] += 1
                     else:
-                        Config.logger.warning(
+                        logger.warning(
                             f"Enrichment: LLM timeout for job {job_id} "
                             f"(attempt {attempts}/{MAX_ENRICH_ATTEMPTS}), will retry"
                         )
@@ -202,13 +206,13 @@ async def enrich_unenriched_jobs(
                     payload["enriched"] = True
                     payload["enrich_attempts"] = (row.get("enrich_attempts") or 0) + 1
                
-                    Config.logger.debug(f"Updating job {job_id}: {payload}")
+                    logger.debug(f"Updating job {job_id}: {payload}")
 
                     re = await db.upsert("job_list", payload, conflict_column=["company", "location", "title", "apply_url"])
                     stats["enriched"] += 1
                     ENRICHED.append(re)
                 except Exception as e:
-                    Config.logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
+                    logger.error(f"Enrichment: DB update failed for {job_id}: {e}")
                     stats["errors"] += 1
 
             
@@ -227,7 +231,7 @@ async def enrich_unenriched_jobs(
                 })
         stop_ticker.set()
                         
-    Config.logger.info(
+    logger.info(
         f"Enrichment complete — attempted: {stats['attempted']}, "
         f"enriched: {stats['enriched']}, skipped: {stats['skipped']}, "
         f"errors: {stats['errors']}, gave_up: {stats['gave_up']}"

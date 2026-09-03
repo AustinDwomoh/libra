@@ -4,14 +4,19 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
 from Service.db import JobDatabase
+from Utils.run_logging import get_logger, run_dir
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the DB connection pool once at startup and reuse it across requests."""
-    app.state.db = await JobDatabase.create()
-    yield
-    await app.state.db.pool.close()
+    with logger.section("serve", logs=str(run_dir())):
+        app.state.db = await JobDatabase.create()
+        yield
+        await app.state.db.pool.close()
+        logger.info("shutdown: db pool closed")
 
 
 app = FastAPI(

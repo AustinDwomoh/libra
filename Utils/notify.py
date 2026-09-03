@@ -1,10 +1,13 @@
 import os,  requests, json
 from Utils.constants import Config
+from Utils.run_logging import get_logger
+
+logger = get_logger(__name__)
 
 def notify_discord(message: str = '', file_path: str = '', embed: dict = None): #type: ignore
     webhook_url = Config.DISCORD_WEBHOOK
     if not webhook_url:
-        Config.logger.warning("No Discord webhook found. Skipping.")
+        logger.warning("No Discord webhook found. Skipping.")
         return
 
     payload = {}
@@ -26,4 +29,4 @@ def notify_discord(message: str = '', file_path: str = '', embed: dict = None): 
 
         response.raise_for_status()
     except Exception as e:
-        Config.logger.error(f"Failed to send Discord notification: {e}")
+        logger.error(f"Failed to send Discord notification: {e}")

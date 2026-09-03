@@ -19,10 +19,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from Utils.models import Job
 from Utils.constants import JobSource, SpeedyConfig, Defaults, FilePaths, Config
+from Utils.run_logging import get_logger, logged_section
 from JobSource.base import JobSourceBase
 from tqdm import tqdm
 
-logger = Config.logger
+logger = get_logger(__name__)
 
 
 class Speedy(JobSourceBase):
@@ -291,6 +292,7 @@ class Speedy(JobSourceBase):
 
         return False
 
+    @logged_section("fetch_jobs")
     async def fetch_jobs(self) -> List[Job]:
         """
         Main method: Fetch and parse jobs from Speedy.

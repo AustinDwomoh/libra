@@ -23,6 +23,17 @@ Mermaid class + sequence diagrams for most modules live in the main repo under [
 | `Tasks/embeddings.py` | [embeddings_class.md](https://github.com/AustinDwomoh/Libra/blob/master/docs/diagrams/embeddings_class.md) **(new)** | [embeddings_seq.md](https://github.com/AustinDwomoh/Libra/blob/master/docs/diagrams/embeddings_seq.md) **(new)** |
 | `main.py` (API routes) | — | [main_api_seq.md](https://github.com/AustinDwomoh/Libra/blob/master/docs/diagrams/main_api_seq.md) |
 
+## Logging refactor (not yet reflected in the per-module diagrams)
+
+`Utils/run_logging.py` was added and every module switched from `Config.logger`
+to its own `get_logger(__name__)` (`Config.logger` stays as a shim). Pipeline
+entrypoints gained `@logged_section` / `with logger.section(...)` wrappers. The
+per-module class diagrams still show the old `+logger` reads-from-`Config` edges
+and `constants_class.md` still describes the old `file_handler` / `logs/run.log`
+setup — regenerate the pairs for `Utils/constants.py`, `Service/azalea.py`,
+`JobSource/*`, `Refine/refine.py`, `Tasks/expired.py`, `Tasks/embeddings.py`, and
+`Tasks/scrape.py` next pass. See [[Logging]] for the actual behaviour.
+
 ## What changed in this pass
 
 Follow-up pass, catching up on everything merged/edited since the previous regeneration below (`aa49fdc` → current), which touched `JobSource/simplify.py`, `JobSource/jsearch.py`, `Refine/extractor.py`, `Refine/llm.py`, `Refine/refine.py`, `Service/azalea.py`, `Utils/constants.py`, `main.py`, and added the new `JobSource/speedy.py`:

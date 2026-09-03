@@ -20,6 +20,9 @@ from Utils.constants import (
     FilePaths,
     LogMessages,Config
 )
+from Utils.run_logging import get_logger, logged_section
+
+logger = get_logger(__name__)
 
 
 
@@ -39,30 +42,24 @@ class Azalea:
         self.helpers[JobSource.SIMPLIFY] = Simplify()
         self.helpers[JobSource.SPEEDY] = Speedy()
 
-        Config.logger.info(
+        logger.info(
             f"✓ {JobSource.SIMPLIFY.value.capitalize()} helper initialized"
         )
-        Config.logger.info(
+        logger.info(
             f"✓ {JobSource.SPEEDY.value.capitalize()} helper initialized"
         )
 
         # JSearch requires API key
         if Config.J_SEARCH_API_KEY:
             self.helpers[JobSource.JSEARCH] = JSearch()
-            Config.logger.info(
+            logger.info(
                 f"✓ {JobSource.JSEARCH.value.capitalize()} helper initialized"
             )
         else:
-            Config.logger.warning(
+            logger.warning(
                 f"⚠ {JobSource.JSEARCH.value.capitalize()} API key not found. Scraping disabled."
             )
      
-
-    def _log_section(self, title: str):
-        """Log a section divider"""
-        Config.logger.info("=" * 60)
-        Config.logger.info(title)
-        Config.logger.info("=" * 60)
 
     # ============================================================================ #
     #                                   FETCH FN                                   #
@@ -76,34 +73,40 @@ class Azalea:
     ) -> List[Job]:
         """Fetch jobs from a specific source"""
 
-        Config.logger.info("=" * 60)
-        Config.logger.info(
-            LogMessages.fetch_start(
-                source.value, position_type.value, date_posted.value
-            )
-        )
-        Config.logger.info("=" * 60)
         helper = self.helpers.get(source)
         if not helper:
-            Config.logger.warning(f"Helper for '{source}' not available")
-            return []
-        try:
-            match source:
-                case JobSource.JSEARCH:
-                    queries = kwargs.get("queries")
-                    jobs = await helper.fetch_jobs(
-                        queries, position_type=position_type, date_posted=date_posted
-                    )
-                case _:
-                    jobs = await helper.fetch_jobs()
-
-            self.stats.increment_source(source, len(jobs))
-            return jobs
-        except Exception as e:
-            Config.logger.error(f"{source.value.capitalize()} scraping failed: {e}")
-            self.stats.errors += 1
+            logger.warning(f"Helper for '{source}' not available")
             return []
 
+        with logger.section(
+            "fetch",
+            source=source.value,
+            position_type=position_type.value,
+            date_posted=date_posted.value,
+        ):
+            logger.info(
+                LogMessages.fetch_start(
+                    source.value, position_type.value, date_posted.value
+                )
+            )
+            try:
+                match source:
+                    case JobSource.JSEARCH:
+                        queries = kwargs.get("queries")
+                        jobs = await helper.fetch_jobs(
+                            queries, position_type=position_type, date_posted=date_posted
+                        )
+                    case _:
+                        jobs = await helper.fetch_jobs()
+
+                self.stats.increment_source(source, len(jobs))
+                return jobs
+            except Exception as e:
+                logger.error(f"{source.value.capitalize()} scraping failed: {e}")
+                self.stats.errors += 1
+                return []
+
+    @logged_section("fetch_all_sources")
     async def fetch_all_sources( self, position_type: PositionType = PositionType.INTERN, jsearch_queries: Optional[List[str]] = None, ) -> List[Job]:
         """Fetch jobs from all available sources"""
         all_jobs = []
@@ -135,7 +138,7 @@ class Azalea:
                 pbar.update(1)
 
         self.stats.total_fetched = len(all_jobs)
-        Config.logger.info(
+        logger.info(
             f"Total positions fetched from all sources: {self.stats.total_fetched}"
         )
 
@@ -147,21 +150,22 @@ class Azalea:
 
     def print_summary(self):
         """Print execution summary"""
-        self._log_section("EXECUTION SUMMARY")
+        logger.section("summary")
 
-        Config.logger.info("Sources:")
-        Config.logger.info(f"  • Simplify GitHub: {self.stats.simplify} jobs")
-        Config.logger.info(f"  • JSearch API: {self.stats.jsearch} jobs")
+        logger.info("Sources:")
+        logger.info(f"  • Simplify GitHub: {self.stats.simplify} jobs")
+        logger.info(f"  • JSearch API: {self.stats.jsearch} jobs")
 
-        Config.logger.info("")
-        Config.logger.info("Results:")
-        Config.logger.info(f"  • Total fetched: {self.stats.total_fetched} jobs")
-        Config.logger.info(f"  • After deduplication: {self.stats.unique_jobs} jobs")
-        Config.logger.info(f"  • Inserted to DB: {self.stats.inserted} jobs")
+        logger.info("")
+        logger.info("Results:")
+        logger.info(f"  • Total fetched: {self.stats.total_fetched} jobs")
+        logger.info(f"  • After deduplication: {self.stats.unique_jobs} jobs")
+        logger.info(f"  • Inserted to DB: {self.stats.inserted} jobs")
 
-        Config.logger.info("=" * 60)
+        logger.info("=" * 60)
 
  
+    @logged_section("run")
     async def run(
         self,
         position_type: PositionType = PositionType.INTERN,
@@ -186,100 +190,96 @@ class Azalea:
                 )
 
                 if not all_jobs:
-                    Config.logger.warning("No jobs found to process")
+                    logger.warning("No jobs found to process")
                     return self.stats.to_dict()
 
                 # ── Step 2: Deduplicate ──────────────────────────────────────
-                self._log_section("DEDUPLICATING JOBS")
+                with logger.section("dedup", fetched=len(all_jobs)):
+                    if all_jobs:
+                        valid_jobs = [job for job in all_jobs if job is not None and job.is_valid()]
 
-                if all_jobs:
-                    valid_jobs = [job for job in all_jobs if job is not None and job.is_valid()]
+                        # Dedupe using Job's own __eq__/__hash__, preserving scrape order
+                        seen = set()
+                        unique_jobs = []
+                        for job in valid_jobs:
+                            if job not in seen:
+                                seen.add(job)
+                                unique_jobs.append(job)
 
-                    # Dedupe using Job's own __eq__/__hash__, preserving scrape order
-                    seen = set()
-                    unique_jobs = []
-                    for job in valid_jobs:
-                        if job not in seen:
-                            seen.add(job)
-                            unique_jobs.append(job)
-
-                    self.stats.unique_jobs = len(unique_jobs)
-                    self.jobs = unique_jobs
-                    Config.logger.info(
-                        LogMessages.deduplication_result(len(all_jobs), len(unique_jobs))
-                    )
+                        self.stats.unique_jobs = len(unique_jobs)
+                        self.jobs = unique_jobs
+                        logger.info(
+                            LogMessages.deduplication_result(len(all_jobs), len(unique_jobs))
+                        )
 
                 # ── Step 3: Save JSON (optional) ─────────────────────────────
                 if save_json:
                     Config.save_to_json([Job.to_dict(job) for job in unique_jobs if not any(domain in job.apply_url for domain in domains_to_ignore)], FilePaths.SCRAPED_JOBS_JSON) #type: ignore
             else:
                 # ── TEST MODE: skip fetch/dedup, load directly from JSON ─────
-                Config.logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
+                logger.warning("TEST MODE: loading jobs from local JSON, skipping fetch & dedup")
                 try:
                     with open(FilePaths.SCRAPED_JOBS_JSON, "r", encoding="utf-8") as f:
                         list_jobs = json.load(f)[:10]  # type: ignore
                         for job_dict in list_jobs:
                             try:
-                                Config.logger.info(f"Loading job from JSON: {job_dict.get('title', 'unknown')} at {job_dict.get('company', 'unknown')}")
+                                logger.info(f"Loading job from JSON: {job_dict.get('title', 'unknown')} at {job_dict.get('company', 'unknown')}")
                                 
                                 company_id = UUID(job_dict.get("company", None))
                                 if not company_id:
-                                    Config.logger.warning(f"Company ID missing or invalid for job: {job_dict.get('title', 'unknown')}. Skipping this job.")
+                                    logger.warning(f"Company ID missing or invalid for job: {job_dict.get('title', 'unknown')}. Skipping this job.")
                                     company_id = await db.get_or_create_company(job_dict.get("company_name", "Unknown"))
                                 job = Job.from_dict(job_dict, company=company_id)
                                 self.jobs.append(job)
                             except Exception as e:
-                                Config.logger.error(f"Error loading job from JSON: {e}")
+                                logger.error(f"Error loading job from JSON: {e}")
                 except FileNotFoundError:
-                    Config.logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} not found — run without test=True first")
+                    logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} not found — run without test=True first")
                     return self.stats.to_dict()
                 except json.JSONDecodeError as e:
-                    Config.logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} contains invalid JSON: {e}")
+                    logger.error(f"TEST MODE: {FilePaths.SCRAPED_JOBS_JSON} contains invalid JSON: {e}")
                     return self.stats.to_dict()
 
             # ── Step 4: Insert to DB ─────────────────────────────────────────
-            self._log_section("SAVING TO DATABASE")
-            
-            
-            # Domains we skip when inserting — sites that reliably block scraping
-            # (bot-check pages, 403s) so enrichment/expiry checks can never get a
-            # real read on them. Add more as needed.
-            fin_jobs = [
-                job.to_dict_for_db(job)
-                for job in self.jobs
-                if job.title != "unknown"
-                and job.apply_url
-                and not any(domain in job.apply_url for domain in domains_to_ignore)
-            ]
-            if not fin_jobs:
-                Config.logger.warning("No valid jobs to insert into the database")
-                return self.stats.to_dict()
-            
-            fin_jobs = fin_jobs[:10] if test else fin_jobs  # Limit to first 10 jobs for testing purposes
-            inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["company", "location", "title", "apply_url"])
-            self.stats.inserted = len(inserted) #note this isn't a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated. 
-            Config.logger.info(
-                f"Inserted {self.stats.inserted} new jobs into the database"
-            )
+            with logger.section("save_to_db"):
+                # Domains we skip when inserting — sites that reliably block scraping
+                # (bot-check pages, 403s) so enrichment/expiry checks can never get a
+                # real read on them. Add more as needed.
+                fin_jobs = [
+                    job.to_dict_for_db(job)
+                    for job in self.jobs
+                    if job.title != "unknown"
+                    and job.apply_url
+                    and not any(domain in job.apply_url for domain in domains_to_ignore)
+                ]
+                if not fin_jobs:
+                    logger.warning("No valid jobs to insert into the database")
+                    return self.stats.to_dict()
+
+                fin_jobs = fin_jobs[:10] if test else fin_jobs  # Limit to first 10 jobs for testing purposes
+                inserted = await db.bulk_upsert("job_list", fin_jobs , conflict_column=["company", "location", "title", "apply_url"])
+                self.stats.inserted = len(inserted) #note this isn't a perfect measure of how many new jobs were inserted, as some may have been updated instead of inserted, but it gives us a rough idea of how many jobs were processed and saved to the database. We can improve this later by checking the returned rows for any indication of whether they were inserted or updated.
+                logger.info(
+                    f"Inserted {self.stats.inserted} new jobs into the database"
+                )
 
             # ── Step 5: Enrich unenriched jobs via Groq ──────────────────────
             #if enrich:
-            #    self._log_section("ENRICHING JOBS (Groq)")
-            #    enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
-            #    Config.logger.info(f"Enrichment stats: {enrich_stats}")
+            #    with logger.section("enrich"):
+            #        enrich_stats = await enrich_unenriched_jobs(batch_size=enrich_batch_size)
+            #        logger.info(f"Enrichment stats: {enrich_stats}")
             #using the test mode to only test the enrichment process, we can enable this later when we have more confidence in the enrichment code
             # the task/ will take care of actually calling and enriching the jobs, we just want to test the enrichment code here without having to run the whole fetch/dedup process every time
             if test:
-                self._log_section("ENRICHING JOBS ")
-                
-                enrich_stats = await enrich_unenriched_jobs(batch_size=5)
-                Config.logger.info(f"Enrichment stats: {enrich_stats}")
+                with logger.section("enrich"):
+                    enrich_stats = await enrich_unenriched_jobs(batch_size=5)
+                    logger.info(f"Enrichment stats: {enrich_stats}")
                 self.print_summary()
             return self.stats.to_dict()
 
         except Exception as e:
             self.stats.errors = 1
-            Config.logger.error(f"Error in run process: {e}", exc_info=True)
+            logger.error(f"Error in run process: {e}", exc_info=True)
             raise
 
 def main():

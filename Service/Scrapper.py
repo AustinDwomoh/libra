@@ -2,8 +2,11 @@ from bs4 import BeautifulSoup
 from typing import Optional, Union
 
 from Utils.constants import Config
+from Utils.run_logging import get_logger
 import json, requests, asyncio, re
 from dataclasses import dataclass
+
+logger = get_logger(__name__)
 
 @dataclass
 class ScrapeResult:
@@ -196,7 +199,7 @@ class Pirate:
                 if isinstance(lo, (int, float)) or isinstance(hi, (int, float)):
                     extracted["pay_range"] = [lo, hi]
 
-        Config.logger.info(f"Extracted structured JobPosting data: {extracted}")
+        logger.info(f"Extracted structured JobPosting data: {extracted}")
         return extracted
 
     async def scrape_apply_url(self, url: str) -> Optional[Union[str, dict]] | ScrapeResult:
@@ -214,7 +217,7 @@ class Pirate:
         try:
             from playwright.async_api import async_playwright
         except ImportError:
-            Config.logger.warning("Playwright not installed — run: pip install playwright && playwright install chromium")
+            logger.warning("Playwright not installed — run: pip install playwright && playwright install chromium")
         else:
             try:
                 async with async_playwright() as p:
@@ -246,7 +249,7 @@ class Pirate:
                         response = await page.goto(url, timeout=15000, wait_until="domcontentloaded")
 
                         if response is not None and response.status in self.BLOCKED_STATUS_CODES:
-                            Config.logger.warning(
+                            logger.warning(
                                 f"Blocked (HTTP {response.status}) loading {url} via Playwright"
                             )
                             return {"blocked": True, "status_code": response.status}
@@ -257,7 +260,7 @@ class Pirate:
                         try:
                             await page.wait_for_load_state("networkidle", timeout=8000)
                         except Exception:
-                            Config.logger.debug(
+                            logger.debug(
                                 f"{url}: networkidle not reached within budget — "
                                 "continuing anyway (common with polling/analytics)"
                             )
@@ -268,24 +271,24 @@ class Pirate:
                                     '[data-automation-id="jobPostingDescription"]', timeout=10000
                                 )
                             except Exception:
-                                Config.logger.warning(
+                                logger.warning(
                                     "Workday job description selector never appeared — "
                                     "page may have failed to render or the listing is dead."
                                 )
 
                         if self._is_known_expired_redirect(page.url):
-                            Config.logger.warning(f"Known expired redirect detected: {page.url}")
+                            logger.warning(f"Known expired redirect detected: {page.url}")
                             return None
 
                         html = await page.content()
                         jobposting = self._extract_jobposting_jsonld(html)
                         if jobposting:
-                            Config.logger.info("Found schema.org JobPosting JSON-LD — using structured data")
+                            logger.info("Found schema.org JobPosting JSON-LD — using structured data")
                             return self._jobposting_to_fields(jobposting)
 
                         
                         
-                        Config.logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
+                        logger.debug(f"Dumped raw page HTML ({len(html)} chars) to debug_page.html")
 
                         await page.evaluate(
                             "document.querySelectorAll('nav,footer,header,script,style')"
@@ -310,7 +313,7 @@ class Pirate:
                                 continue
 
                         text = max(texts, key=len) if texts else ""
-                        Config.logger.info(
+                        logger.info(
                             f"Scraped with Playwright ({len(page.frames)} frame(s) checked) and length={len(text)}"
                         )
                         full_text = self._strip_cookie_boilerplate(text)
@@ -325,19 +328,19 @@ class Pirate:
                     finally:
                         await browser.close()
             except Exception as e:
-                Config.logger.warning(f"Playwright failed: {e} — trying requests fallback")
+                logger.warning(f"Playwright failed: {e} — trying requests fallback")
 
         try:
             resp = requests.get(url, headers=self._HEADERS, timeout=10)
 
             if resp.status_code in self.BLOCKED_STATUS_CODES:
-                Config.logger.warning(
+                logger.warning(
                     f"Blocked (HTTP {resp.status_code}) requesting {url} — treating as blocked, not expired"
                 )
                 return {"blocked": True, "status_code": resp.status_code}
 
             if self._is_known_expired_redirect(resp.url):
-                Config.logger.warning(f"Known expired redirect detected for URL: {resp.url}")
+                logger.warning(f"Known expired redirect detected for URL: {resp.url}")
                 return None
 
             resp.raise_for_status()
@@ -345,12 +348,12 @@ class Pirate:
 
             jobposting = self._extract_jobposting_jsonld(resp.text)
             if jobposting:
-                Config.logger.info("Found schema.org JobPosting JSON-LD (requests fallback)")
+                logger.info("Found schema.org JobPosting JSON-LD (requests fallback)")
                 return self._jobposting_to_fields(jobposting)
 
             for tag in soup(["nav", "footer", "script", "style", "header"]):
                 tag.decompose()
-            Config.logger.info("Scraped with requests (static only)")
+            logger.info("Scraped with requests (static only)")
             full_text = self._strip_cookie_boilerplate(soup.get_text(separator=" "))
             trimmed = self._trim_to_description(full_text)
             return ScrapeResult(
@@ -358,7 +361,7 @@ class Pirate:
                 trimmed_text=Config.clean_ws(trimmed),
             )
         except Exception as e:
-            Config.logger.warning(f"Requests scrape also failed: {e}")
+            logger.warning(f"Requests scrape also failed: {e}")
             return None
 
     def classify_scraped_text(self, text: str) -> str:
